@@ -1,6 +1,5 @@
 /*
  * 2226 USB Linux driver
- *
  * Copyright (C) 2009-2010 Sensoray Company Inc.
  *
  *      This program is free software; you can redistribute it and/or
