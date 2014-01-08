@@ -1,13 +1,14 @@
 /*
  * 2226 USB Linux driver
- * Copyright (C) 2009-2010 Sensoray Company Inc.
+ *
+ * Copyright (C) 2009-2014 Sensoray Company Inc.
  *
  *      This program is free software; you can redistribute it and/or
  *      modify it under the terms of the GNU General Public License as
  *      published by the Free Software Foundation, version 2.
  *
  * @author: D.A., P.E.
- * @date: 2009-2012
+ * @date: 2009-2014
  */
 
 #include <linux/version.h>
@@ -43,6 +44,7 @@
 #include <media/v4l2-ioctl.h>
 #endif
 #endif
+
 
 // update with each new version for easy detection of driver
 // version on embedded products (2420 for instance)
