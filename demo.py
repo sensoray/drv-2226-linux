@@ -1079,13 +1079,13 @@ class Demo:
 						menudefault = i
 					i += 1
 
-				opt.set_menu(menu)
-				opt.set_history(menudefault)
-				hbox.pack_start(opt, False, False, 0)
-				opt.show()
+#				opt.set_menu(menu)
+#				opt.set_history(menudefault)
+#				hbox.pack_start(opt, False, False, 0)
+#				opt.show()
 
-				vbox.pack_start(hbox, False, False, 0)
-				hbox.show()
+#				vbox.pack_start(hbox, False, False, 0)
+#				hbox.show()
 
 			# enumerate video standards
 
