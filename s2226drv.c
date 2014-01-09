@@ -1,6 +1,6 @@
 /*
  * 2226 USB Linux driver
- * Copyright (C) 2009-2010 Sensoray Company Inc.
+ * Copyright (C) 2009-2014 Sensoray Company Inc.
  *
  *      This program is free software; you can redistribute it and/or
  *      modify it under the terms of the GNU General Public License as
@@ -42,6 +42,12 @@
 //#include "compat.h>
 #include <media/v4l2-ioctl.h>
 #endif
+#endif
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 18) || V4L_DVB_TREE
+#include <media/v4l2-dev.h>
+#endif
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 29) || V4L_DVB_TREE
+#include <media/v4l2-device.h>
 #endif
 
 // update with each new version for easy detection of driver
@@ -103,7 +109,7 @@
 #define KERNEL_VERSION_MUTEX_ADDED         KERNEL_VERSION(2, 6, 16)
 #define KERNEL_VERSION_V4L2_NEW_FOPS1      KERNEL_VERSION(2, 6, 27)
 #define KERNEL_VERSION_V4L2_NEW_FOPS2      KERNEL_VERSION(2, 6, 29)
-
+#define KERNEL_VERSION_V4L2DEV KERNEL_VERSION(2, 6, 29)
 #if defined CONFIG_S2226_V4L
 #if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,28)
 #define	V4L2_MPEG_VIDEO_ENCODING_MPEG_4_AVC 2
@@ -328,6 +334,9 @@ struct s2226_dev {
 	int                     v4l_input;
 	spinlock_t		slock;
 	struct video_device     *vdev;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION_V4L2DEV || V4L_DVB_TREE
+	struct v4l2_device v4l2_dev;
+#endif
 	struct s2226_dmaqueue   vidq;
 	struct list_head        s2226_devlist;
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 11, 0)
@@ -5184,13 +5193,22 @@ static int s2226_probe_v4l(struct s2226_dev *dev)
 	/* register video device */
 	dev->vdev = video_device_alloc();
 	memcpy(dev->vdev, &template, sizeof(struct video_device));
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 11, 0)
-	dev->vdev->dev_parent = &dev->interface->dev;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION_V4L2DEV || V4L_DVB_TREE
+	dev->vdev->v4l2_dev = &dev->v4l2_dev;
 #elif LINUX_VERSION_CODE >= KERNEL_VERSION_V4L2_NEW_FOPS1
 	dev->vdev->parent = &dev->interface->dev;
 #else
 	dev->vdev->dev = &dev->interface->dev;
 #endif
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION_V4L2DEV || V4L_DVB_TREE
+	ret = v4l2_device_register(&dev->interface->dev, &dev->v4l2_dev);
+	if (ret) {
+        printk(KERN_ERR "s2226 v4l2 device register fail\n");
+		return ret;
+    }
+#endif
+
 	if (video_nr == -1)
 		ret = video_register_device(dev->vdev,
 					    VFL_TYPE_GRABBER,
@@ -5229,7 +5247,14 @@ static int s2226_probe_v4l(struct s2226_dev *dev)
 static void s2226_exit_v4l(struct s2226_dev *dev)
 {
 #ifdef CONFIG_S2226_V4L
+
 	struct list_head *list;
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION_V4L2DEV || V4L_DVB_TREE
+    v4l2_device_disconnect(&dev->v4l2_dev);
+    v4l2_device_unregister(&dev->v4l2_dev);
+#endif
+
 	if (-1 != dev->vdev->minor) {
 		video_unregister_device(dev->vdev);
 		printk(KERN_INFO "s2226 unregistered\n");
