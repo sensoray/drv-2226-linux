@@ -39,7 +39,6 @@
 #include <media/videobuf-vmalloc.h>
 #include <media/v4l2-ioctl.h>
 
-
 // update with each new version for easy detection of driver
 // version on embedded products (2420 for instance)
 #define S2226_DRIVER_VERSION_STRING "V1.0.8: 03/18/2011"
@@ -77,12 +76,6 @@
 #define INDEX_EP_RAW     3 // raw pipe (USB FW 0x20+ only)
 
 
-
-#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,28)
-#define	V4L2_MPEG_VIDEO_ENCODING_MPEG_4_AVC 2
-#endif
-
-
 #define s2226_mutex_init     mutex_init
 #define s2226_mutex_lock     mutex_lock
 #define s2226_mutex_lock_interruptible mutex_lock_interruptible
@@ -104,12 +97,12 @@ static int filter_mode = 0; // 0 = autodetect, 1=fixed
 int *s2226_debug=&debug;
 int *s2226_filter_mode=&filter_mode;
 
-#ifdef CONFIG_S2226_V4L
+
 static int majorv = 126;
 static LIST_HEAD(s2226_devlist);
 static unsigned int vid_limit = 16;	/* Video memory limit, in Mb */
 static int video_nr = -1;	/* /dev/videoN, -1 for autodetect */
-#endif
+
 
 module_param(debug,int,0);
 MODULE_PARM_DESC(debug, "Debug level(0-4)");
@@ -134,14 +127,14 @@ static int mfgmode = 1;
 module_param(mfgmode,int,0);
 MODULE_PARM_DESC(mfgmode, "Mfg mode (0-off default) internal use.  do not change");
 
-#ifdef CONFIG_S2226_V4L
+
 module_param(majorv,int,0);
 MODULE_PARM_DESC(majorv, "major for video devname");
 module_param(vid_limit, int, 0644);
 MODULE_PARM_DESC(vid_limit, "video memory limit(Mb)");
 module_param(video_nr, int, 0644);
 MODULE_PARM_DESC(video_nr, "start video minor(-1 default autodetect)");
-#endif
+
 
 #define dprintk(level,fmt, arg...)					\
 	do {								\
@@ -270,28 +263,20 @@ struct s2226_dev {
 	int                     contrast;
 	int			resources;
 	struct mutex            reslock; // resource lock(V4L)
-#ifdef CONFIG_S2226_V4L
 	int                     v4l_is_pal; // is PAL standard
 	int                     v4l_input;
 	spinlock_t		slock;
 	struct video_device     *vdev;
-    struct v4l2_device      v4l2_dev;
+	struct v4l2_device      v4l2_dev;
 	struct s2226_dmaqueue   vidq;
 	struct list_head        s2226_devlist;
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 11, 0)
 	v4l2_std_id		current_norm;
-#endif
-#endif
 	struct s2226_audio      aud;
 	int h51_reload_required;
 	int usb_ver;
 	int ep[MAX_ENDPOINTS]; // endpoint address
 	int audio_page;
-
 };
-
-
-
 
 
 #define    S2226_INPUT_COMPOSITE_0     0
@@ -314,7 +299,7 @@ struct s2226_dev {
 #define MAX_USB_SIZE (16*1024)
 #define MAX_USB_INT_SIZE 512	// interrupt
 
-#ifdef CONFIG_S2226_V4L
+
 #define S2226_BUFFER_SIZE (S2226_RB_PKT_SIZE)
 #define S2226_DEF_BUFS    10
 
@@ -324,15 +309,13 @@ struct s2226_buffer {
 	struct videobuf_buffer vb;
 //	const struct s2226_fmt *fmt;
 };
-#endif
+
 
 struct s2226_fh {
 	struct s2226_dev	*dev;
 	unsigned int resources;	/* resource management for device open */
-#ifdef CONFIG_S2226_V4L
 	int type;
 	struct videobuf_queue	vb_vidq;
-#endif
 };
 
 /* function prototypes (forwards)*/
@@ -374,10 +357,8 @@ static int s2226_reset_board(struct s2226_dev *dev);
 static int s2226_default_params(struct s2226_dev *dev);
 static int s2226_probe_v4l(struct s2226_dev *dev);
 static void s2226_exit_v4l(struct s2226_dev *dev);
-#ifdef CONFIG_S2226_V4L
 static int s2226_got_data(struct s2226_dev *dev, int urb_idx);
 static struct videobuf_queue_ops s2226_video_qops;
-#endif
 
 static unsigned char compute_checksum(unsigned char *pdata, int len)
 {
@@ -484,15 +465,15 @@ static int s2226_send_msg(struct s2226_dev *dev, int timeout)
 	// buf[2]: echo ID
 	// buf[3..]: response
 	buf = (unsigned char *) dev->interrupt_buffer;
-    if (buf[0] != INTTYPE_CMDREPLY) {
-        rc = read_interrupt_endpoint(dev, timeout);
-        if (rc < 0) {
-            return rc;
+	if (buf[0] != INTTYPE_CMDREPLY) {
+		rc = read_interrupt_endpoint(dev, timeout);
+		if (rc < 0) {
+			return rc;
+		}
 	}
-    }
-    if (buf[0] != INTTYPE_CMDREPLY) {
-        return -EAGAIN;
-    }
+	if (buf[0] != INTTYPE_CMDREPLY) {
+		return -EAGAIN;
+	}
 	// some error replies
 	// buf[0]: INTYPE_CMDREPLY==1
 	// buf[1]: 0  (same as NOP opcode, so check for NOP below)
@@ -2119,12 +2100,10 @@ int s2226_ioctl(struct inode *inode, struct file *file,
 		if (copy_from_user(&cmd, argp, sizeof(cmd)))
 			return -EINVAL;
 		dprintk(2, "s2226: stop encode, kill urbs\n");
-#if 1
 		for (i = 0; i < RD_URBS; i++) {
 			usb_kill_urb(dev->read_vid[i].urb);
 			dev->read_vid[i].ready = 1;
 		}
-#endif
 		//dprintk(3,"stop encode channel %d\n", cmd.idx);
 		ret = s2226_stop_encode(dev, cmd.idx);
 		res_free(dev, fh, RES_STREAM);
@@ -2462,23 +2441,6 @@ int s2226_ioctl(struct inode *inode, struct file *file,
 		ret = copy_to_user(argp, &cmd, sizeof(cmd));
 		break;
 	}
-#if 0
-	// 7121 is write only!
-	case S2226_IOC_VIDENC_RD:
-	{
-		audio_reg_t cmd;
-		unsigned char rval = 0;
-		if (copy_from_user(&cmd, argp, sizeof(cmd)))
-			return -EINVAL;
-		ret = send_vid_rd(dev, cmd.addr, &rval, DEVID_VIDENC);
-		if (ret < 0) return ret;
-		cmd.value = rval;
-		ret = copy_to_user(argp, &cmd, sizeof(cmd));
-		dprintk(3, "ioc_videnc_rd  %d %x\n", cmd.addr, cmd.value);
-		break;
-	}
-#endif
-//	case S2226_IOC_RESET_H51:
 	case S2226_IOC_RESET_BOARD:
 		// If resetting from user space, should do the following
 		// S2226_IOC_RESET_BOARD
@@ -2490,12 +2452,10 @@ int s2226_ioctl(struct inode *inode, struct file *file,
 	case S2226_IOC_ARM_VER:
 		ret = copy_to_user(argp, &dev->arm_ver, sizeof(cmd));
 		break;
-//	case S2226_IOC_FX2SAM_LO:
     case S2226_IOC_SET_BASEFW:
 		ret = s2226_fx2sam(dev, 0);
 		dprintk(2, "%s FX2SAM_LO %d\n", __func__, ret);
 		break;
-//	case S2226_IOC_FX2SAM_HI:
     case S2226_IOC_SET_NEWFW:
 		ret = s2226_fx2sam(dev, 1);
 		dprintk(2, "%s FX2SAM_HI %d\n", __func__, ret);
@@ -2777,8 +2737,6 @@ static void s2226_read_vid_callback(struct urb *u)
 
 	dprintk(4, "s2226_read_vid_callback %d\n", i);
 	if (urb_context == S2226_CONTEXT_V4L) {	
-#ifdef CONFIG_S2226_V4L
-		
 		s2226_got_data(dev, i);
 		// submit the urb again
 		dprintk(4, "data from URB %d, resubmit URB\n", i);
@@ -2790,9 +2748,6 @@ static void s2226_read_vid_callback(struct urb *u)
 				  &dev->read_vid[i]);
 		//dev->read_vid[i].ready = 0;
 		(void) usb_submit_urb(dev->read_vid[i].urb, GFP_ATOMIC);
-#else
-		printk(KERN_ERR "invalid context.  V4L support not compiled into driver\n");
-#endif
 	} else {
 		wake_up(&urb->dev->read_vid_wq);
 	}
@@ -3161,9 +3116,7 @@ static int s2226_probe(struct usb_interface *interface, const struct usb_device_
 			dprintk(0, "error getting USB firmware version\n");
 		dev->usb_ver = buf[0] + (buf[1] << 8);
 	}
-
 	s2226_prime_fx2(dev);
-#if 1
 	retval = s2226_set_attr(dev, ATTR_INT_EP_PKTEND, 0);
 	
 	{
@@ -3181,7 +3134,6 @@ static int s2226_probe(struct usb_interface *interface, const struct usb_device_
 		else if (fwver < 0x24)
 			printk(KERN_INFO "s2226: firmware out of date!\n");
 	}
-#endif
 	// set default parameters
 	s2226_default_params(dev);
 
@@ -3289,7 +3241,6 @@ static void __exit usb_s2226_exit(void)
 	/* deregister this driver with the USB subsystem */
 	usb_deregister(&s2226_driver);
 }
-
 
 int s2226_vendor_request(void *pdev, unsigned char req, 
 			 unsigned short idx, unsigned short val,
@@ -3870,7 +3821,7 @@ int s2226_get_fpga_ver(struct s2226_dev *dev)
  *  begin V4L code
  */
 
-#ifdef CONFIG_S2226_V4L
+
 #define S2226_NORMS		(V4L2_STD_PAL | V4L2_STD_NTSC)
 
 
@@ -3927,9 +3878,7 @@ static int s2226_open_v4l(struct file *file)
                                 fh->type,
                                 V4L2_FIELD_NONE,
                                 sizeof(struct s2226_buffer), fh
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 37)
                                 , NULL /* ext_lock */
-#endif
         );
 
 
@@ -3942,7 +3891,7 @@ static int s2226_release_v4l(struct file *file)
 	struct s2226_fh *fh = file->private_data;
 	struct s2226_dev *dev = fh->dev;
 	int i;
-    int res;
+	int res;
 	if (!dev)
 		return -ENODEV;
 
@@ -3968,9 +3917,8 @@ static int s2226_release_v4l(struct file *file)
 		usb_kill_urb(dev->read_vid[i].urb);
 		dev->read_vid[i].ready = 0;
 	}
-
 	/* turn off stream */
-    res = res_check(fh);
+	res = res_check(fh);
 	if (res) {
         if (res & RES_STREAM) {
             if (dev->h51_state == STREAM_MODE_ENCODE)
@@ -4240,7 +4188,7 @@ static struct videobuf_queue_ops s2226_video_qops = {
 	.buf_queue = buffer_queue,
 	.buf_release = buffer_release,
 };
-#endif
+
 
 // now part of standard driver
 static int res_get(struct s2226_dev *dev, struct s2226_fh *fh, int res)
@@ -4285,7 +4233,6 @@ static void res_free(struct s2226_dev *dev, struct s2226_fh *fh, int res)
 	dprintk(4, "res: put\n");
 }
 
-#ifdef CONFIG_S2226_V4L
 static int vidioc_querycap(struct file *file, void *priv,
 			   struct v4l2_capability *cap)
 {
@@ -4295,15 +4242,8 @@ static int vidioc_querycap(struct file *file, void *priv,
 
 	strlcpy(cap->driver, "s2226", sizeof(cap->driver));
 	strlcpy(cap->card, "s2226", sizeof(cap->card));
-
-
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 26)
 	strlcpy(cap->bus_info, dev_name(&dev->udev->dev),
 		sizeof(cap->bus_info));
-#else
-	strlcpy(cap->bus_info, dev->udev->dev.bus_id,
-		sizeof(cap->bus_info));
-#endif
 	usb_make_path(dev->udev, cap->bus_info, sizeof(cap->bus_info));
 	cap->version = 0;//TODO S2226_VERSION;
 	cap->capabilities = V4L2_CAP_VIDEO_CAPTURE | V4L2_CAP_STREAMING;
@@ -4400,23 +4340,11 @@ static int vidioc_s_fmt_vid_cap(struct file *file, void *priv,
 			    struct v4l2_format *f)
 {
 	struct s2226_fh *fh = priv;
-//	const struct s2226_fmt *fmt;
-//#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 27)
-//	struct videobuf_queue *q = &fh->vb_vidq;
-//#endif
 	int ret;
 	printk("set fmt\n");
 	ret = vidioc_try_fmt_vid_cap(file, fh, f);
-
 	if (ret < 0)
 		return ret;
-//#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 27)
-//	s2226_mutex_lock(&q->vb_lock);
-//#endif
-
-//#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 27)
-//	s2226_mutex_unlock(&q->vb_lock);
-//#endif
 	return 0;
 }
 
@@ -4578,55 +4506,37 @@ static int s2226_new_v4l_input(struct s2226_dev *dev, int inp)
 	return 0;
 }
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 26) || V4L_DVB_TREE
 static int vidioc_g_std(struct file *file, void *priv, v4l2_std_id *i)
 {
 	struct s2226_fh *fh = priv;
 	struct s2226_dev *dev = fh->dev;
-#if LINUX_VERSION_CODE < KERNEL_VERSION(3, 11, 0)
-	*i = dev->vdev->current_norm;
-#else
 	*i = dev->current_norm;
-#endif
 	return 0;
 }
-#endif
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 10, 0)
 static int vidioc_s_std(struct file *file, void *priv, v4l2_std_id _i)
 {
 	v4l2_std_id *i = &_i;
-#else
-static int vidioc_s_std(struct file *file, void *priv, v4l2_std_id *i)
-{
-#endif
 	struct s2226_fh *fh = priv;
 	struct s2226_dev *dev = fh->dev;
 	int ret = 0;
-
 	if (res_locked(fh->dev, fh) & RES_STREAM) {
 		dprintk(1, "can't change standard after started\n");
 		return -EBUSY;
 	}
-
 	if (*i & V4L2_STD_NTSC) {
 		switch (dev->v4l_input) {
 		case S2226_INPUT_SDI_1080I_50:
 		case S2226_INPUT_SDI_720P_50:
 			return -EINVAL;
-        case S2226_INPUT_SD_COLORBARS:
-            if (dev->v4l_is_pal)
-                return -EINVAL;
+		case S2226_INPUT_SD_COLORBARS:
+			if (dev->v4l_is_pal)
+				return -EINVAL;
 		default:
 			break;
 		}
-#if LINUX_VERSION_CODE < KERNEL_VERSION(3, 11, 0)
-        dev->vdev->current_norm = V4L2_STD_NTSC;
-#else
-	dev->current_norm = V4L2_STD_NTSC;
-#endif
-	} 
-
+		dev->current_norm = V4L2_STD_NTSC;
+	}
  	if (*i & V4L2_STD_PAL) {
 		switch (dev->v4l_input) {
 		case S2226_INPUT_SDI_1080I_5994:
@@ -4635,19 +4545,14 @@ static int vidioc_s_std(struct file *file, void *priv, v4l2_std_id *i)
 		case S2226_INPUT_SDI_720P_5994:
 			return -EINVAL;
         case S2226_INPUT_SD_COLORBARS:
-            if (!dev->v4l_is_pal)
-                return -EINVAL;
+		if (!dev->v4l_is_pal)
+			return -EINVAL;
 		default:
 			break;
 		}
-#if LINUX_VERSION_CODE < KERNEL_VERSION(3, 11, 0)
-        dev->vdev->current_norm = V4L2_STD_PAL;
-#else
-	dev->current_norm = V4L2_STD_PAL;
-#endif
+		dev->current_norm = V4L2_STD_PAL;
 	}
 	dev->v4l_is_pal = (*i & V4L2_STD_PAL) ? 1 : 0;
-
 	// change input based on new standard
 	ret = s2226_new_v4l_input(dev, dev->v4l_input);
 	printk("%s %d\n",__func__, ret);
@@ -4993,9 +4898,7 @@ static const struct v4l2_ioctl_ops s2226_ioctl_ops = {
 	.vidioc_qbuf = vidioc_qbuf,
 	.vidioc_dqbuf = vidioc_dqbuf,
 	.vidioc_s_std = vidioc_s_std,
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 32)
 	.vidioc_g_std = vidioc_g_std,
-#endif
 	.vidioc_enum_input = vidioc_enum_input,
 	.vidioc_g_input = vidioc_g_input,
 	.vidioc_s_input = vidioc_s_input,
@@ -5017,64 +4920,10 @@ static struct video_device template = {
 	.release = video_device_release,
 	.tvnorms = S2226_NORMS,
 };
-#else
-
-
-static const struct file_operations s2226_fops_v4l = {
-	.owner = THIS_MODULE,
-	.open = s2226_open_v4l,
-	.release = s2226_release_v4l,
-	.poll = s2226_poll_v4l,
-	.ioctl = video_ioctl2,	/* V4L2 ioctl handler */
-	.compat_ioctl = v4l_compat_ioctl32,
-	.mmap = s2226_mmap_v4l,
-	.llseek = no_llseek,
-};
-
-static struct video_device template = {
-	.name = "s2226v4l",
-	.type = VID_TYPE_CAPTURE,
-	.fops = &s2226_fops_v4l,
-	.minor = -1,
-	.release = video_device_release,
-	.vidioc_querycap = vidioc_querycap,
-	.vidioc_enum_fmt_vid_cap = vidioc_enum_fmt_vid_cap,
-	.vidioc_g_fmt_vid_cap = vidioc_g_fmt_vid_cap,
-	.vidioc_try_fmt_vid_cap = vidioc_try_fmt_vid_cap,
-	.vidioc_s_fmt_vid_cap = vidioc_s_fmt_vid_cap,
-	.vidioc_reqbufs = vidioc_reqbufs,
-	.vidioc_querybuf = vidioc_querybuf,
-	.vidioc_qbuf = vidioc_qbuf,
-	.vidioc_dqbuf = vidioc_dqbuf,
-	.vidioc_s_std = vidioc_s_std,
-	.vidioc_enum_input = vidioc_enum_input,
-	.vidioc_g_input = vidioc_g_input,
-	.vidioc_s_input = vidioc_s_input,
-	.vidioc_queryctrl = vidioc_queryctrl,
-	.vidioc_g_ctrl = vidioc_g_ctrl,
-	.vidioc_s_ctrl = vidioc_s_ctrl,
-	.vidioc_streamon = vidioc_streamon,
-	.vidioc_streamoff = vidioc_streamoff,
-#ifdef CONFIG_VIDEO_V4L1_COMPAT
-	.vidiocgmbuf = vidioc_cgmbuf,
-#endif
-
-#if LINUX_VERSION_CODE > KERNEL_VERSION(2, 6, 18)
-	.tvnorms = V4L2_STD_PAL | V4L2_STD_NTSC,
-#else
-	.tvnorms = S2226_NORMS,
-	.tvnormsize = 2,
-#endif
-#if LINUX_VERSION_CODE < KERNEL_VERSION(3, 11, 0)
-	.current_norm = V4L2_STD_NTSC_M,
-#endif
-};
-#endif
 
 
 static int s2226_probe_v4l(struct s2226_dev *dev)
 {
-#ifdef CONFIG_S2226_V4L
 	int ret;
 	int cur_nr = video_nr;
 	list_add_tail(&dev->s2226_devlist, &s2226_devlist);
@@ -5113,21 +4962,15 @@ static int s2226_probe_v4l(struct s2226_dev *dev)
 	}
 	printk(KERN_INFO "Sensoray 2226 V4L driver \n"); //todo add revision
 	return ret;
-#else
-	// no V4L, return, but initialize resources lock
-	s2226_mutex_init(&dev->reslock);
-	return 0;
-#endif
 }
 
 
 
 static void s2226_exit_v4l(struct s2226_dev *dev)
 {
-#ifdef CONFIG_S2226_V4L
 	struct list_head *list;
-    v4l2_device_disconnect(&dev->v4l2_dev);
-    v4l2_device_unregister(&dev->v4l2_dev);
+	v4l2_device_disconnect(&dev->v4l2_dev);
+	v4l2_device_unregister(&dev->v4l2_dev);
 	if (-1 != dev->vdev->minor) {
 		video_unregister_device(dev->vdev);
 		printk(KERN_INFO "s2226 unregistered\n");
@@ -5139,9 +4982,6 @@ static void s2226_exit_v4l(struct s2226_dev *dev)
 		list = s2226_devlist.next;
 		list_del(list);
 	}
-#else
-	return;
-#endif
 }
 
 
