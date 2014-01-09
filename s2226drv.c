@@ -371,7 +371,11 @@ struct s2226_dev {
 #define    S2226_INPUT_SDI_1080I_5994  11
 #define    S2226_INPUT_SDI_1080I_60    12
 #define    S2226_INPUT_SDI_720P_50     13
-#define    S2226_INPUT_MAX             14
+#define    S2226_INPUT_SDI_720P_24     14
+#define    S2226_INPUT_SDI_720P_2398   15
+#define    S2226_INPUT_SDI_1080P_24    16
+#define    S2226_INPUT_SDI_1080P_2398  17
+#define    S2226_INPUT_MAX             18
 
 /* maximum size of URB buffers */
 #define MAX_USB_SIZE (16*1024)
@@ -1402,7 +1406,6 @@ int s2226_start_decode(struct s2226_dev *dev, int idx)
 	int i;
 	int rc;
 	int numregs;
-
 	struct usb_host_interface *iface_desc;
 	struct usb_endpoint_descriptor *endpoint;
 	if (!dev->udev) return -ENODEV;
@@ -1466,6 +1469,14 @@ int s2226_start_decode(struct s2226_dev *dev, int idx)
 			case INPUT_H51_SD_576I:
 				value = 0x1005;
 				break;
+			case INPUT_H51_HD_720P_2398:
+			case INPUT_H51_HD_720P_24:
+				value = 0x102a;
+				break;
+			case INPUT_H51_HD_1080P_2398:
+			case INPUT_H51_HD_1080P_24:
+				value = 0x1022;
+				break;
 			case INPUT_H51_HD_1080I_60:
 			case INPUT_H51_HD_1080I_5994:
 				value = 0x1000;
@@ -1489,11 +1500,15 @@ int s2226_start_decode(struct s2226_dev *dev, int idx)
 			case INPUT_H51_HD_720P_50:
 			case INPUT_H51_HD_720P_60:
 			case INPUT_H51_HD_720P_5994:
+			case INPUT_H51_HD_720P_2398:
+			case INPUT_H51_HD_720P_24:
 				value = 0x0000;
 				break;
 			case INPUT_H51_HD_1080I_60:
 			case INPUT_H51_HD_1080I_50:
 			case INPUT_H51_HD_1080I_5994:
+			case INPUT_H51_HD_1080P_2398:
+			case INPUT_H51_HD_1080P_24:
 				value = 0x0002;
 				break;
 			}
@@ -1875,6 +1890,30 @@ static int s2226_new_input(struct s2226_dev *dev, int input)
 			}
 		}
 		break;
+	case INPUT_SDI_720P_24:
+	case INPUT_SDI_720P_24_CB:
+	case INPUT_H51_HD_720P_24:
+		vFormat = VFMT_720_24p;
+		frRed = 0;
+		break;
+	case INPUT_SDI_720P_2398:
+	case INPUT_SDI_720P_2398_CB:
+	case INPUT_H51_HD_720P_2398:
+		vFormat = VFMT_720_24p;
+		frRed = 1;
+		break;
+	case INPUT_SDI_1080P_24:
+	case INPUT_SDI_1080P_24_CB:
+	case INPUT_H51_HD_1080P_24:
+		vFormat = VFMT_1080_24p;
+		frRed = 0;
+		break;
+	case INPUT_SDI_1080P_2398:
+	case INPUT_SDI_1080P_2398_CB:
+	case INPUT_H51_HD_1080P_2398:
+		vFormat = VFMT_1080_24p;
+		frRed = 1;
+		break;
 	default:
 		printk(KERN_ERR "s2226: unknown input %d!\n", input);
 		return -EINVAL;
@@ -1892,12 +1931,12 @@ static int s2226_new_input(struct s2226_dev *dev, int input)
 	case INPUT_SDI_1080I_50:
 	case INPUT_SDI_1080I_50_CB:
 	default:
-		(void) s2226_set_attr(dev, ATTR_INPUT_DELAY, 300);
+		(void) s2226_set_attr(dev, ATTR_INPUT_DELAY, 500);
 		break;
 	case INPUT_H51_SD_576I:
 	case INPUT_H51_SD_480I:
 		is_decode = 1;
-		(void) s2226_set_attr(dev, ATTR_INPUT_DELAY, 300);
+		(void) s2226_set_attr(dev, ATTR_INPUT_DELAY, 500);
 		break;
 	case INPUT_H51_HD_1080I_50:
 	case INPUT_H51_HD_1080I_5994:
@@ -1906,11 +1945,9 @@ static int s2226_new_input(struct s2226_dev *dev, int input)
 	case INPUT_H51_HD_720P_5994:
 	case INPUT_H51_HD_720P_60:
 		is_decode = 1;
-		// TODO: this shouldn't be 
 		(void) s2226_set_attr(dev, ATTR_INPUT_DELAY, 650);
 		break;
 	}
-
 	dev->cur_input = input;
 	dev->is_decode = is_decode;
 	dev->h51_mode.vFormat = vFormat;
@@ -4648,6 +4685,22 @@ static int s2226_new_v4l_input(struct s2226_dev *dev, int inp)
 		s2226_new_input(dev, INPUT_SDI_720P_50);
 		dev->v4l_is_pal = 1;
 		break;
+	case S2226_INPUT_SDI_720P_24:
+		s2226_new_input(dev, INPUT_SDI_720P_24);
+		dev->v4l_is_pal = 0;
+		break;
+	case S2226_INPUT_SDI_720P_2398:
+		s2226_new_input(dev, INPUT_SDI_720P_2397);
+		dev->v4l_is_pal = 1;
+		break;
+	case S2226_INPUT_SDI_1080P_24:
+		s2226_new_input(dev, INPUT_SDI_1080P_24);
+		dev->v4l_is_pal = 0;
+		break;
+	case S2226_INPUT_SDI_1080P_2398:
+		s2226_new_input(dev, INPUT_SDI_1080P_2397);
+		dev->v4l_is_pal = 1;
+		break;
 	default:
 		return -EINVAL;
 	}
@@ -4690,6 +4743,8 @@ static int vidioc_s_std(struct file *file, void *priv, v4l2_std_id *i)
 		switch (dev->v4l_input) {
 		case S2226_INPUT_SDI_1080I_50:
 		case S2226_INPUT_SDI_720P_50:
+		case S2226_INPUT_SDI_720P_2397:
+		case S2226_INPUT_SDI_1080P_2397:
 			return -EINVAL;
 		case S2226_INPUT_SD_COLORBARS:
 			if (dev->v4l_is_pal)
@@ -4710,6 +4765,8 @@ static int vidioc_s_std(struct file *file, void *priv, v4l2_std_id *i)
 		case S2226_INPUT_SDI_1080I_60:
 		case S2226_INPUT_SDI_720P_60:
 		case S2226_INPUT_SDI_720P_5994:
+		case S2226_INPUT_SDI_720P_24:
+		case S2226_INPUT_SDI_1080P_24:
 			return -EINVAL;
 		case S2226_INPUT_SD_COLORBARS:
 			if (!dev->v4l_is_pal)
@@ -4789,6 +4846,22 @@ static int vidioc_enum_input(struct file *file, void *priv,
 		strlcpy(inp->name, "SDI Input(1080i 60Hz NTSC)", sizeof(inp->name));
 		inp->std = V4L2_STD_NTSC;
 		break;
+	case S2226_INPUT_SDI_720P_24:
+		strlcpy(inp->name, "SDI Input(720p 24Hz NTSC)", sizeof(inp->name));
+		inp->std = V4L2_STD_NTSC;
+		break;
+	case S2226_INPUT_SDI_720P_2397:
+		strlcpy(inp->name, "SDI Input(720p 23.97Hz PAL)", sizeof(inp->name));
+		inp->std = V4L2_STD_PAL;
+		break;
+	case S2226_INPUT_SDI_1080P_24:
+		strlcpy(inp->name, "SDI Input(1080p 24Hz NTSC)", sizeof(inp->name));
+		inp->std = V4L2_STD_NTSC;
+		break;
+	case S2226_INPUT_SDI_1080P_2397:
+		strlcpy(inp->name, "SDI Input(1080p 23.97Hz PAL)", sizeof(inp->name));
+		inp->std = V4L2_STD_PAL;
+		break;
 	}
 	//inp->status =  (status & 0x01) ? 0
 	//: V4L2_IN_ST_NO_SIGNAL;
@@ -4803,6 +4876,7 @@ static int vidioc_g_input(struct file *file, void *priv, unsigned int *i)
 	dprintk(4, "g_input\n");
 	return 0;
 }
+
 static int vidioc_s_input(struct file *file, void *priv, unsigned int i)
 {
 	struct s2226_fh *fh = file->private_data;
