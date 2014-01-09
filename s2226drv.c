@@ -4688,7 +4688,7 @@ static int s2226_new_v4l_input(struct s2226_dev *dev, int inp)
 		dev->v4l_is_pal = 0;
 		break;
 	case S2226_INPUT_SDI_720P_2398:
-		s2226_new_input(dev, INPUT_SDI_720P_2397);
+		s2226_new_input(dev, INPUT_SDI_720P_2398);
 		dev->v4l_is_pal = 1;
 		break;
 	case S2226_INPUT_SDI_1080P_24:
@@ -4696,7 +4696,7 @@ static int s2226_new_v4l_input(struct s2226_dev *dev, int inp)
 		dev->v4l_is_pal = 0;
 		break;
 	case S2226_INPUT_SDI_1080P_2398:
-		s2226_new_input(dev, INPUT_SDI_1080P_2397);
+		s2226_new_input(dev, INPUT_SDI_1080P_2398);
 		dev->v4l_is_pal = 1;
 		break;
 	default:
@@ -4741,8 +4741,8 @@ static int vidioc_s_std(struct file *file, void *priv, v4l2_std_id *i)
 		switch (dev->v4l_input) {
 		case S2226_INPUT_SDI_1080I_50:
 		case S2226_INPUT_SDI_720P_50:
-		case S2226_INPUT_SDI_720P_2397:
-		case S2226_INPUT_SDI_1080P_2397:
+		case S2226_INPUT_SDI_720P_2398:
+		case S2226_INPUT_SDI_1080P_2398:
 			return -EINVAL;
 		case S2226_INPUT_SD_COLORBARS:
 			if (dev->v4l_is_pal)
@@ -4848,7 +4848,7 @@ static int vidioc_enum_input(struct file *file, void *priv,
 		strlcpy(inp->name, "SDI Input(720p 24Hz NTSC)", sizeof(inp->name));
 		inp->std = V4L2_STD_NTSC;
 		break;
-	case S2226_INPUT_SDI_720P_2397:
+	case S2226_INPUT_SDI_720P_2398:
 		strlcpy(inp->name, "SDI Input(720p 23.97Hz PAL)", sizeof(inp->name));
 		inp->std = V4L2_STD_PAL;
 		break;
@@ -4856,7 +4856,7 @@ static int vidioc_enum_input(struct file *file, void *priv,
 		strlcpy(inp->name, "SDI Input(1080p 24Hz NTSC)", sizeof(inp->name));
 		inp->std = V4L2_STD_NTSC;
 		break;
-	case S2226_INPUT_SDI_1080P_2397:
+	case S2226_INPUT_SDI_1080P_2398:
 		strlcpy(inp->name, "SDI Input(1080p 23.97Hz PAL)", sizeof(inp->name));
 		inp->std = V4L2_STD_PAL;
 		break;
