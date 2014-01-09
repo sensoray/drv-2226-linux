@@ -32,15 +32,12 @@
 #include <linux/highmem.h>
 #include <linux/kthread.h>
 #include <linux/poll.h>
-#ifdef CONFIG_S2226_V4L
 #include <linux/videodev2.h>
+#include <media/v4l2-dev.h>
+#include <media/v4l2-device.h>
 #include <media/v4l2-common.h>
 #include <media/videobuf-vmalloc.h>
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 27)
-//#include "compat.h>
 #include <media/v4l2-ioctl.h>
-#endif
-#endif
 
 
 // update with each new version for easy detection of driver
@@ -53,19 +50,6 @@
 #include "h51reg_dec.h"
 #include "dh2226.h"
 
-
-// TODO usb_xxx_msg timeouts changed at kernel version 2.6.10 or 2.6.11
-// find out which one exactly
-#if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 11)
-#define S2226_BULKMSG_TO msecs_to_jiffies(5000)
-#define S2226_FLASHERASE_TO msecs_to_jiffies(60000)
-#define S2226_FLASHWRITE_TO msecs_to_jiffies(9000)
-#define S2226_FLASHREAD_TO S2226_FLASHWRITE_TO 
-#define S2226_SETMODE_TO msecs_to_jiffies(9000)
-#define S2226_SETINPUT_TO msecs_to_jiffies(20000)
-#define S2226_PRIMEFX2_TO msecs_to_jiffies(500)
-#define S2226_CTRLMSG_TO msecs_to_jiffies(500)
-#else
 #define S2226_SETINPUT_TO 20000
 #define S2226_FLASHERASE_TO 60000
 #define S2226_FLASHWRITE_TO 9000
@@ -74,12 +58,9 @@
 #define S2226_BULKMSG_TO  5000
 #define S2226_PRIMEFX2_TO 500
 #define S2226_CTRLMSG_TO  500
-#endif
-
 #define S2226_DEF_VBITRATE 2000
 #define S2226_MIN_VBITRATE 1000
 #define S2226_MAX_VBITRATE 19000
-
 #define S2226_DEF_ABITRATE 256
 #define S2226_CONTEXT_USBDEV 0  // for /dev/s2226vX
 #define S2226_CONTEXT_V4L    1  // for /dev/videoX
@@ -96,30 +77,17 @@
 #define INDEX_EP_RAW     3 // raw pipe (USB FW 0x20+ only)
 
 
-// for backward compatibility
-#define KERNEL_VERSION_IOCTL_REMOVED       KERNEL_VERSION(2, 6, 36)
-#define KERNEL_VERSION_USBCOMPLETE_CHANGED KERNEL_VERSION(2, 6, 19)
-#define KERNEL_VERSION_MUTEX_ADDED         KERNEL_VERSION(2, 6, 16)
-#define KERNEL_VERSION_V4L2_NEW_FOPS1      KERNEL_VERSION(2, 6, 27)
-#define KERNEL_VERSION_V4L2_NEW_FOPS2      KERNEL_VERSION(2, 6, 29)
 
-#if defined CONFIG_S2226_V4L
 #if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,28)
 #define	V4L2_MPEG_VIDEO_ENCODING_MPEG_4_AVC 2
 #endif
-#endif
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION_MUTEX_ADDED
+
 #define s2226_mutex_init     mutex_init
 #define s2226_mutex_lock     mutex_lock
 #define s2226_mutex_lock_interruptible mutex_lock_interruptible
 #define s2226_mutex_unlock   mutex_unlock
-#else
-#define s2226_mutex_init     init_MUTEX
-#define s2226_mutex_lock     down
-#define s2226_mutex_lock_interruptible     down_interruptible
-#define s2226_mutex_unlock   up
-#endif
+
 
 /* table of devices that work with this driver */
 static struct usb_device_id s2226_table [] = {
@@ -187,11 +155,8 @@ MODULE_PARM_DESC(video_nr, "start video minor(-1 default autodetect)");
 
 
 static struct usb_driver s2226_driver;
-#if LINUX_VERSION_CODE >= KERNEL_VERSION_MUTEX_ADDED
 static struct mutex  s2226_devices_lock;
-#else
-static struct semaphore  s2226_devices_lock;
-#endif
+
 
 #define MAX_CHANNELS 5
 
@@ -264,17 +229,8 @@ struct s2226_audio {
 struct s2226_dev {
 	int			users;
 	int			debug;
-#if LINUX_VERSION_CODE >= KERNEL_VERSION_MUTEX_ADDED
-    struct mutex ioctl_lock;
-#else
-    struct semaphore ioctl_lock;
-#endif
-
-#if LINUX_VERSION_CODE >= KERNEL_VERSION_MUTEX_ADDED
+	struct mutex ioctl_lock;
 	struct mutex            audlock;
-#else
-	struct semaphore        audlock;
-#endif
 	struct usb_device	*udev;		// our USB device
 	struct usb_interface	*interface;	// usb interface
 	struct kref		kref;
@@ -297,11 +253,7 @@ struct s2226_dev {
 	int                     is_decode; // set to decode input
 	int                     input_set;
 	unsigned                id; // message id
-#if LINUX_VERSION_CODE >= KERNEL_VERSION_MUTEX_ADDED
 	struct mutex            cmdlock;
-#else
-	struct semaphore        cmdlock;
-#endif
 	int                     closed_gop;
 	int                     dec_pes_pkts;
 	int                     fpga_ver;
@@ -317,16 +269,13 @@ struct s2226_dev {
 	int                     saturation;
 	int                     contrast;
 	int			resources;
-#if LINUX_VERSION_CODE >= KERNEL_VERSION_MUTEX_ADDED
 	struct mutex            reslock; // resource lock(V4L)
-#else
-	struct semaphore        reslock; // resource lock(V4L)
-#endif
 #ifdef CONFIG_S2226_V4L
 	int                     v4l_is_pal; // is PAL standard
 	int                     v4l_input;
 	spinlock_t		slock;
 	struct video_device     *vdev;
+    struct v4l2_device      v4l2_dev;
 	struct s2226_dmaqueue   vidq;
 	struct list_head        s2226_devlist;
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 11, 0)
@@ -400,11 +349,9 @@ static int read_interrupt_endpoint(struct s2226_dev *dev, int timeout);
 static int s2226_get_attr(struct s2226_dev *dev, int attr, int *value);
 extern int setH51regs (struct MODE2226 *mode);
 extern void loadH51rb(H51_RB_SIZE *rb_size);
-#if LINUX_VERSION_CODE >= KERNEL_VERSION_USBCOMPLETE_CHANGED
+
 static void s2226_read_vid_callback(struct urb *u);
-#else
-static void s2226_read_vid_callback(struct urb *u, struct pt_regs *ptregs);
-#endif
+
 
 int s2226_vendor_request(void *pdev, unsigned char req,
 			 unsigned short idx, unsigned short val,
@@ -2813,11 +2760,8 @@ static int s2226_release(struct inode *inode, struct file *file)
 	return 0;
 }
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION_USBCOMPLETE_CHANGED
+
 static void s2226_read_vid_callback(struct urb *u)
-#else
-static void s2226_read_vid_callback(struct urb *u, struct pt_regs *ptregs)
-#endif
 {
 	struct s2226_urb *urb;
 	struct s2226_dev *dev;
@@ -2905,11 +2849,7 @@ static ssize_t s2226_read_vid(struct file *file, char *buffer, size_t nbytes,
 	return S2226_RB_PKT_SIZE;
 }
 	
-#if LINUX_VERSION_CODE >= KERNEL_VERSION_USBCOMPLETE_CHANGED
 static void s2226_write_vid_callback(struct urb *u)
-#else
-static void s2226_write_vid_callback(struct urb *u, struct pt_regs *ptregs)
-#endif
 {
     struct s2226_urb *urb;
     int i;
@@ -3043,11 +2983,7 @@ static struct file_operations s2226_vfops = {
 	.owner =    THIS_MODULE,
 	.open =     s2226_open,
 	.compat_ioctl = s2226_ioctl_compat,
-#if LINUX_VERSION_CODE < KERNEL_VERSION_IOCTL_REMOVED
-	.ioctl =    s2226_ioctl,
-#else
 	.unlocked_ioctl = s2226_ioctl_unlocked,
-#endif
 	.read =     s2226_read_vid,
 	.write =    s2226_write_vid,
 	.release =  s2226_release,
@@ -3288,12 +3224,16 @@ static void s2226_disconnect(struct usb_interface *interface)
 	struct s2226_dev *dev = NULL;
 	int minor = interface->minor;
 	dprintk(4,"s2226_DISCONNECT %d\n", minor);
+
+
+
 	// lock to prevent s2226_open() from racing s2226_disconnect() 
 	s2226_mutex_lock( &s2226_devices_lock);
 	dev = usb_get_intfdata(interface);
 	// give back our minor 
 	s2226_mutex_lock(&dev->ioctl_lock);
 	usb_deregister_dev(interface, &s2226_class);
+
 	s2226_mutex_unlock(&dev->ioctl_lock);
 
 	if (dev) {
@@ -3933,17 +3873,10 @@ int s2226_get_fpga_ver(struct s2226_dev *dev)
 #ifdef CONFIG_S2226_V4L
 #define S2226_NORMS		(V4L2_STD_PAL | V4L2_STD_NTSC)
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION_V4L2_NEW_FOPS2
-static int s2226_open_v4l(struct inode *inode, struct file *file)
-#else
+
 static int s2226_open_v4l(struct file *file)
-#endif
 {
-#if LINUX_VERSION_CODE < KERNEL_VERSION_V4L2_NEW_FOPS2
-	int minor = iminor(inode);
-#else
 	int minor = video_devdata(file)->minor;
-#endif
 	struct s2226_dev *h, *dev = NULL;
 	struct s2226_fh *fh;
 	struct list_head *list;
@@ -4004,11 +3937,7 @@ static int s2226_open_v4l(struct file *file)
 	return 0;
 }
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION_V4L2_NEW_FOPS2
-static int s2226_release_v4l(struct inode *inode, struct file *file)
-#else
 static int s2226_release_v4l(struct file *file)
-#endif
 {
 	struct s2226_fh *fh = file->private_data;
 	struct s2226_dev *dev = fh->dev;
@@ -5035,35 +4964,22 @@ static int s2226_mmap_v4l(struct file *file, struct vm_area_struct *vma)
 	if (!fh)
 		return -ENODEV;
 	dprintk(4, "mmap called, vma=0x%08lx\n", (unsigned long)vma);
-
 	ret = videobuf_mmap_mapper(&fh->vb_vidq, vma);
-
 	dprintk(4, "vma start=0x%08lx, size=%ld, ret=%d\n",
 		(unsigned long)vma->vm_start,
 		(unsigned long)vma->vm_end - (unsigned long)vma->vm_start, ret);
-
 	return ret;
 }
 
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION_V4L2_NEW_FOPS1
-#if LINUX_VERSION_CODE < KERNEL_VERSION_V4L2_NEW_FOPS2
-static const struct file_operations s2226_fops_v4l = {
-#else
+
 static const struct v4l2_file_operations s2226_fops_v4l = {
-#endif
 	.owner = THIS_MODULE,
 	.open = s2226_open_v4l,
 	.release = s2226_release_v4l,
 	.poll = s2226_poll_v4l,
-	.ioctl = video_ioctl2,	/* V4L2 ioctl handler */
-#if LINUX_VERSION_CODE < KERNEL_VERSION_V4L2_NEW_FOPS2
-	.compat_ioctl = v4l_compat_ioctl32,
-#endif
+	.ioctl = video_ioctl2,
 	.mmap = s2226_mmap_v4l,
-#if LINUX_VERSION_CODE < KERNEL_VERSION_V4L2_NEW_FOPS2
-	.llseek = no_llseek,
-#endif
 };
 
 static const struct v4l2_ioctl_ops s2226_ioctl_ops = {
@@ -5100,9 +5016,6 @@ static struct video_device template = {
 	.minor = -1,
 	.release = video_device_release,
 	.tvnorms = S2226_NORMS,
-#if LINUX_VERSION_CODE < KERNEL_VERSION(3, 11, 0)
-	.current_norm = V4L2_STD_NTSC_M,
-#endif
 };
 #else
 
@@ -5125,17 +5038,10 @@ static struct video_device template = {
 	.minor = -1,
 	.release = video_device_release,
 	.vidioc_querycap = vidioc_querycap,
-#if LINUX_VERSION_CODE >= KERNEL_VERSION_V4L2_NEW_FOPS1
 	.vidioc_enum_fmt_vid_cap = vidioc_enum_fmt_vid_cap,
 	.vidioc_g_fmt_vid_cap = vidioc_g_fmt_vid_cap,
 	.vidioc_try_fmt_vid_cap = vidioc_try_fmt_vid_cap,
 	.vidioc_s_fmt_vid_cap = vidioc_s_fmt_vid_cap,
-#else
-	.vidioc_enum_fmt_cap = vidioc_enum_fmt_vid_cap,
-	.vidioc_g_fmt_cap = vidioc_g_fmt_vid_cap,
-	.vidioc_try_fmt_cap = vidioc_try_fmt_vid_cap,
-	.vidioc_s_fmt_cap = vidioc_s_fmt_vid_cap,
-#endif
 	.vidioc_reqbufs = vidioc_reqbufs,
 	.vidioc_querybuf = vidioc_querybuf,
 	.vidioc_qbuf = vidioc_qbuf,
@@ -5165,8 +5071,6 @@ static struct video_device template = {
 };
 #endif
 
-#endif //CONFIG_S2226_V4L
-
 
 static int s2226_probe_v4l(struct s2226_dev *dev)
 {
@@ -5183,13 +5087,13 @@ static int s2226_probe_v4l(struct s2226_dev *dev)
 	/* register video device */
 	dev->vdev = video_device_alloc();
 	memcpy(dev->vdev, &template, sizeof(struct video_device));
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 11, 0)
-	dev->vdev->dev_parent = &dev->interface->dev;
-#elif LINUX_VERSION_CODE >= KERNEL_VERSION_V4L2_NEW_FOPS1
-	dev->vdev->parent = &dev->interface->dev;
-#else
-	dev->vdev->dev = &dev->interface->dev;
-#endif
+    dev->vdev->v4l2_dev = &dev->v4l2_dev;
+    ret = v4l2_device_register(&dev->interface->dev, &dev->v4l2_dev);
+    if (ret) {
+        printk(KERN_ERR "s2226: could not register device\n");
+        return ret;
+    }
+
 	if (video_nr == -1)
 		ret = video_register_device(dev->vdev,
 					    VFL_TYPE_GRABBER,
@@ -5198,23 +5102,16 @@ static int s2226_probe_v4l(struct s2226_dev *dev)
 		ret = video_register_device(dev->vdev,
 					    VFL_TYPE_GRABBER,
 					    cur_nr);
-#if LINUX_VERSION_CODE >= KERNEL_VERSION_V4L2_NEW_FOPS1
 	video_set_drvdata(dev->vdev, dev);
-#else
-	dev->vdev->priv = dev;
-#endif
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 11, 0)
 	dev->current_norm = V4L2_STD_NTSC_M;
-#endif
 	
 	if (ret != 0) {
 		dev_err(&dev->udev->dev,
 			"failed to register video device!\n");
+        v4l2_device_unregister(&dev->v4l2_dev);
 		return ret;
 	}
-
 	printk(KERN_INFO "Sensoray 2226 V4L driver \n"); //todo add revision
-
 	return ret;
 #else
 	// no V4L, return, but initialize resources lock
@@ -5229,6 +5126,8 @@ static void s2226_exit_v4l(struct s2226_dev *dev)
 {
 #ifdef CONFIG_S2226_V4L
 	struct list_head *list;
+    v4l2_device_disconnect(&dev->v4l2_dev);
+    v4l2_device_unregister(&dev->v4l2_dev);
 	if (-1 != dev->vdev->minor) {
 		video_unregister_device(dev->vdev);
 		printk(KERN_INFO "s2226 unregistered\n");
