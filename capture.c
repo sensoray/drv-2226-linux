@@ -75,7 +75,7 @@ typedef enum {
 	TYPE_RGB565,
 } comp_type;
 
-static int type = TYPE_JPEG;
+static int type = TYPE_MPEGTS;
 static int mux_type = TYPE_H264;
 static FILE *G_fvout = NULL;
 static int G_size = 0; // full size
