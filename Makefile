@@ -21,10 +21,10 @@ s2226-objs = s2226drv.o h51set.o
 
 CFLAGS_DEMO = -Wall -Wcast-align -Wcast-qual  -D_LINUX -DSENSORAY_OS_LINUX -Iovlgen
 #add -g for debug binaries
-EXTRA_CFLAGS += -Wall -O2 -D_LINUX -DSENSORAY_OS_LINUX -DDRIVER_BUILD -DOS_LINUX 
+#EXTRA_CFLAGS += -Wall -O2 -D_LINUX -DSENSORAY_OS_LINUX -DDRIVER_BUILD -DOS_LINUX 
 
 # if using V4L comment out line above and uncomment line below
-#EXTRA_CFLAGS += -Wall -O2 -D_LINUX -DOSTYPE_LINUX -DDRIVER_BUILD -DOS_LINUX -DCONFIG_S2226_V4L
+EXTRA_CFLAGS += -Wall -O2 -D_LINUX -DOSTYPE_LINUX -DDRIVER_BUILD -DOS_LINUX -DCONFIG_S2226_V4L
 
 
 modules:
