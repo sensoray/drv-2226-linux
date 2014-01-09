@@ -39,6 +39,7 @@
 #include <media/videobuf-vmalloc.h>
 #include <media/v4l2-ioctl.h>
 
+
 // update with each new version for easy detection of driver
 // version on embedded products (2420 for instance)
 #define S2226_DRIVER_VERSION_STRING "V1.0.8: 03/18/2011"
@@ -74,6 +75,7 @@
 #define INDEX_EP_CONTROL 1 // control messages
 #define INDEX_EP_RESP    2 // responses
 #define INDEX_EP_RAW     3 // raw pipe (USB FW 0x20+ only)
+
 
 
 #define s2226_mutex_init     mutex_init
@@ -3853,12 +3855,6 @@ static int s2226_open_v4l(struct file *file)
 		return -ENODEV;
 	}
 
-	if (dev->users > 0) {
-        // TODO: FIXME.  This should be allowed for V4L also!
-		printk("s2226: device already open.\n");
-		s2226_mutex_unlock(&s2226_devices_lock);
-		return -ENODEV;
-	}
 	// allocate file context data
 	fh = kmalloc(sizeof(struct s2226_fh),GFP_KERNEL);
 	if (NULL == fh) {
@@ -4864,20 +4860,20 @@ static unsigned int s2226_poll_v4l(struct file *file,
 static int s2226_mmap_v4l(struct file *file, struct vm_area_struct *vma)
 {
 	struct s2226_fh *fh = file->private_data;
-    struct videobuf_queue *q = &fh->vb_vidq;
+	struct videobuf_queue *q = &fh->vb_vidq;
 	int ret;
 	dprintk(4, "%s\n", __func__);
 	if (!fh)
 		return -ENODEV;
-
+	dprintk(4, "mmap called, vma=0x%08lx\n", (unsigned long)vma);
 	// workaround deadlock bug introduced in 3.11 (in videobuf)
-    //https://www.mail-archive.com/linux-media@vger.kernel.org/msg68345.html
-    //Note: we will migrate to videobuf2 soon.
+	//https://www.mail-archive.com/linux-media@vger.kernel.org/msg68345.html
+	//Note: we will migrate to videobuf2 soon.
 	mutex_lock(&q->vb_lock);
-    q->ext_lock = (struct mutex *) 1;
+	q->ext_lock = (struct mutex *) 1;
 	dprintk(4, "mmap called, vma=0x%08lx\n", (unsigned long)vma);
 	ret = videobuf_mmap_mapper(q, vma);
-    q->ext_lock = NULL;
+	q->ext_lock = NULL;
 	mutex_unlock(&q->vb_lock);
     
 	dprintk(4, "vma start=0x%08lx, size=%ld, ret=%d\n",
@@ -4946,12 +4942,12 @@ static int s2226_probe_v4l(struct s2226_dev *dev)
 	/* register video device */
 	dev->vdev = video_device_alloc();
 	memcpy(dev->vdev, &template, sizeof(struct video_device));
-    dev->vdev->v4l2_dev = &dev->v4l2_dev;
-    ret = v4l2_device_register(&dev->interface->dev, &dev->v4l2_dev);
-    if (ret) {
-        printk(KERN_ERR "s2226: could not register device\n");
-        return ret;
-    }
+	dev->vdev->v4l2_dev = &dev->v4l2_dev;
+	ret = v4l2_device_register(&dev->interface->dev, &dev->v4l2_dev);
+	if (ret) {
+		printk(KERN_ERR "s2226: could not register device\n");
+		return ret;
+	}
 
 	if (video_nr == -1)
 		ret = video_register_device(dev->vdev,
