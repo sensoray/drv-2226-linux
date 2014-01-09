@@ -5042,13 +5042,25 @@ static unsigned int s2226_poll_v4l(struct file *file,
 static int s2226_mmap_v4l(struct file *file, struct vm_area_struct *vma)
 {
 	struct s2226_fh *fh = file->private_data;
+    struct videobuf_queue *q = &fh->vb_vidq;
 	int ret;
 	dprintk(4, "%s\n", __func__);
 	if (!fh)
 		return -ENODEV;
 	dprintk(4, "mmap called, vma=0x%08lx\n", (unsigned long)vma);
-
-	ret = videobuf_mmap_mapper(&fh->vb_vidq, vma);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 11, 0)
+	// workaround deadlock bug introduced in 3.11 (in videobuf)
+    //https://www.mail-archive.com/linux-media@vger.kernel.org/msg68345.html
+    //Note: we will migrate to videobuf2 soon.
+	mutex_lock(&q->vb_lock);
+    q->ext_lock = (struct mutex *) 1;
+#endif
+	dprintk(4, "mmap called, vma=0x%08lx\n", (unsigned long)vma);
+	ret = videobuf_mmap_mapper(q, vma);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 11, 0)
+    q->ext_lock = NULL;
+	mutex_unlock(&q->vb_lock);
+#endif
 
 	dprintk(4, "vma start=0x%08lx, size=%ld, ret=%d\n",
 		(unsigned long)vma->vm_start,
