@@ -257,7 +257,7 @@ inline int is_hd_input(int input)
 #define VFMT_480_60i        4       // 720x480 (59.94i) ITU-R BT.656-4 supported (works)
 #define VFMT_576_50i        5       // 720x576 (50i) ITU-R BT.656-4 supported (TBD)
 #define VFMT_1080_24p       34      // 1920x1080 (23.98p/24p) SMPTE274M supported (TBD)
-//#define VFMT_720_24p        42      // 1280x720 (23.98p/24p) SMPTE296M-2001 supported
+#define VFMT_720_24p        42      // 1280x720 (23.98p/24p) SMPTE296M-2001 supported
 
 // AMODE values match those of the A_MODE field in APRA
 #define AMODE_MP1L2         0       // MPEG-1 layer 2, default
