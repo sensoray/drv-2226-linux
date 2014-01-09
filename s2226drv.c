@@ -3981,12 +3981,6 @@ static int s2226_open_v4l(struct file *file)
 		return -ENODEV;
 	}
 
-	if (dev->users > 0) {
-        // TODO: FIXME.  This should be allowed for V4L also!
-		printk("s2226: device already open.\n");
-		s2226_mutex_unlock(&s2226_devices_lock);
-		return -ENODEV;
-	}
 	// allocate file context data
 	fh = kmalloc(sizeof(struct s2226_fh),GFP_KERNEL);
 	if (NULL == fh) {
