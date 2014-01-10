@@ -1931,12 +1931,12 @@ static int s2226_new_input(struct s2226_dev *dev, int input)
 	case INPUT_SDI_1080I_50:
 	case INPUT_SDI_1080I_50_CB:
 	default:
-		(void) s2226_set_attr(dev, ATTR_INPUT_DELAY, 500);
+		//(void) s2226_set_attr(dev, ATTR_INPUT_DELAY, 500);
 		break;
 	case INPUT_H51_SD_576I:
 	case INPUT_H51_SD_480I:
 		is_decode = 1;
-		(void) s2226_set_attr(dev, ATTR_INPUT_DELAY, 500);
+		//(void) s2226_set_attr(dev, ATTR_INPUT_DELAY, 500);
 		break;
 	case INPUT_H51_HD_1080I_50:
 	case INPUT_H51_HD_1080I_5994:
@@ -1945,7 +1945,7 @@ static int s2226_new_input(struct s2226_dev *dev, int input)
 	case INPUT_H51_HD_720P_5994:
 	case INPUT_H51_HD_720P_60:
 		is_decode = 1;
-		(void) s2226_set_attr(dev, ATTR_INPUT_DELAY, 650);
+		//(void) s2226_set_attr(dev, ATTR_INPUT_DELAY, 650);
 		break;
 	}
 	dev->cur_input = input;
@@ -1955,8 +1955,7 @@ static int s2226_new_input(struct s2226_dev *dev, int input)
 	dev->input_set = 1;
 	/*
 	 * new input will clear the audio settings. 
-	 * If using audimode=1(default for standalone driver),
-	 * we configure them here
+	 * reconfigure if necessary
 	 */
 	if (audiomode == S2226_AUDIOMODE_AUTO_2420 ||
 	    audiomode == S2226_AUDIOMODE_AUTO_2226S) {
