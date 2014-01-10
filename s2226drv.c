@@ -7,7 +7,7 @@
  *      published by the Free Software Foundation, version 2.
  *
  * @author: D.A., P.E.
- * @date: 2009-2012
+ * @date: 2009-2014
  */
 
 #include <linux/version.h>
