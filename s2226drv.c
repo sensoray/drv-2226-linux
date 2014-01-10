@@ -348,7 +348,6 @@ struct s2226_dev {
 	int usb_ver;
 	int ep[MAX_ENDPOINTS]; // endpoint address
 	int audio_page;
-
 };
 
 
@@ -1929,12 +1928,12 @@ static int s2226_new_input(struct s2226_dev *dev, int input)
 	case INPUT_SDI_1080I_50:
 	case INPUT_SDI_1080I_50_CB:
 	default:
-		(void) s2226_set_attr(dev, ATTR_INPUT_DELAY, 500);
+		//(void) s2226_set_attr(dev, ATTR_INPUT_DELAY, 500);
 		break;
 	case INPUT_H51_SD_576I:
 	case INPUT_H51_SD_480I:
 		is_decode = 1;
-		(void) s2226_set_attr(dev, ATTR_INPUT_DELAY, 500);
+		//(void) s2226_set_attr(dev, ATTR_INPUT_DELAY, 500);
 		break;
 	case INPUT_H51_HD_1080I_50:
 	case INPUT_H51_HD_1080I_5994:
@@ -1943,7 +1942,7 @@ static int s2226_new_input(struct s2226_dev *dev, int input)
 	case INPUT_H51_HD_720P_5994:
 	case INPUT_H51_HD_720P_60:
 		is_decode = 1;
-		(void) s2226_set_attr(dev, ATTR_INPUT_DELAY, 650);
+		//(void) s2226_set_attr(dev, ATTR_INPUT_DELAY, 650);
 		break;
 	}
 	dev->cur_input = input;
@@ -1953,8 +1952,7 @@ static int s2226_new_input(struct s2226_dev *dev, int input)
 	dev->input_set = 1;
 	/*
 	 * new input will clear the audio settings. 
-	 * If using audimode=1(default for standalone driver),
-	 * we configure them here
+	 * reconfigure if necessary
 	 */
 	if (audiomode == S2226_AUDIOMODE_AUTO_2420 ||
 	    audiomode == S2226_AUDIOMODE_AUTO_2226S) {
@@ -2498,14 +2496,9 @@ int s2226_ioctl(struct inode *inode, struct file *file,
 			return -EBUSY;
 		}
 		ret = s2226_set_attr(dev, ATTR_INPUT, arg);
-		// fpga gets booted now after set_input
-		// check fw ver if not set
-		// This must be done before s2226_new_input
-		// Especially if an alternate FPGA version
-		// is loaded.
-		s2226_get_fpga_ver(dev);
-		// FIXME: find out why it is returning -1
-		// still return the error if invalid
+		if (dev->fpga_ver <= 0) {
+			s2226_get_fpga_ver(dev);
+		}
 		if (1) { //ret == 0) {
 			int rc;
 			rc = s2226_new_input(dev, arg);
