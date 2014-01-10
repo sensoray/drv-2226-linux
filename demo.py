@@ -330,10 +330,10 @@ class CaptureThread(threading.Thread):
 				try:
 					self.sock.send(data)
 				except:
-					print "Socket send failed"
+					#print "Socket send failed"
 					status = "Status: Socket send failed"
-					self.process.terminate()
-					break
+					#self.process.terminate()
+					#break
 			try: self.process.wait()
 			except: pass
 			os.close(pr)
