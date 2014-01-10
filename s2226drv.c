@@ -4879,7 +4879,7 @@ static int vidioc_s_input(struct file *file, void *priv, unsigned int i)
 {
 	struct s2226_fh *fh = file->private_data;
 	struct s2226_dev *dev = fh->dev;
-	dprintk(4, "s_input\n");
+	dprintk(4, "s_input %d\n", i);
 	if (i >= S2226_INPUT_MAX)
 		return -EINVAL;
 	s2226_new_v4l_input(dev, i);
@@ -4891,10 +4891,10 @@ static int vidioc_s_input(struct file *file, void *priv, unsigned int i)
 static int mpeg_queryctrl(u32 id, struct v4l2_queryctrl *ctrl)
 {
 	int i;
-	static const u32 user_ctrls[] = {
-		V4L2_CID_USER_CLASS,
-		0
-	};
+//	static const u32 user_ctrls[] = {
+//		V4L2_CID_USER_CLASS,
+//		0
+//	};
 	// must be in increasing order
 	static const u32 mpeg_ctrls[] = {
 		V4L2_CID_MPEG_CLASS,
@@ -4908,7 +4908,7 @@ static int mpeg_queryctrl(u32 id, struct v4l2_queryctrl *ctrl)
 		0
 	};
 	static const u32 *ctrl_classes[] = {
-		user_ctrls,
+		//user_ctrls,
 		mpeg_ctrls,
 		NULL
 	};
@@ -4957,6 +4957,11 @@ static int vidioc_queryctrl(struct file *file, void *priv,
 	return -EINVAL;
 }
 
+static int vidioc_querymenu(struct file *file, void *priv,
+			    struct v4l2_querymenu *qmenu)
+{
+	return v4l2_ctrl_query_menu(qmenu, NULL, NULL);
+}
 
 static int vidioc_g_ctrl(struct file *file, void *priv,
 			 struct v4l2_control *ctrl)
@@ -5174,6 +5179,7 @@ static const struct v4l2_ioctl_ops s2226_ioctl_ops = {
 	.vidioc_g_input = vidioc_g_input,
 	.vidioc_s_input = vidioc_s_input,
 	.vidioc_queryctrl = vidioc_queryctrl,
+	.vidioc_querymenu = vidioc_querymenu,
 	.vidioc_g_ctrl = vidioc_g_ctrl,
 	.vidioc_s_ctrl = vidioc_s_ctrl,
 	.vidioc_streamon = vidioc_streamon,
@@ -5235,6 +5241,7 @@ static struct video_device template = {
 	.vidioc_g_input = vidioc_g_input,
 	.vidioc_s_input = vidioc_s_input,
 	.vidioc_queryctrl = vidioc_queryctrl,
+	.vidioc_querymenu = vidioc_querymenu,
 	.vidioc_g_ctrl = vidioc_g_ctrl,
 	.vidioc_s_ctrl = vidioc_s_ctrl,
 	.vidioc_streamon = vidioc_streamon,
