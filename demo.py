@@ -1041,6 +1041,43 @@ class Demo:
 				vbox.pack_start(hbox, False, False, 0)
 				hbox.show()
 
+
+			if cp.capabilities & V4L2_CAP_VIDEO_CAPTURE:
+				format = v4l2_format()
+				format.type = V4L2_BUF_TYPE_VIDEO_CAPTURE
+				try: ioctl(self.vd, VIDIOC_G_FMT, format)
+				except: pass
+
+				dprint("current format is 0x%08x" % format.fmt.pix.pixelformat)
+				self.outfmt = format.fmt.pix.pixelformat
+				self.width = format.fmt.pix.width
+				self.height = format.fmt.pix.height
+				dprint("current size is ", self.width, self.height)
+
+				hbox = gtk.HBox(False, 10)
+				label = gtk.Label("Size:")
+				hbox.pack_start(label, False, False, 0)
+				label.show()
+
+				opt = gtk.OptionMenu()
+				menu = gtk.Menu()
+				menudefault = 0
+				i = 0
+				for dim in [
+					[720,576, "D1 PAL"],
+					[704,576, "D1 PAL "],
+					[720,480, "D1 NTSC "],
+					[704,480, "D1 NTSC"],
+					[640,480, "VGA"],
+					[352,288, "CIF"],
+					[320,240, "SIF"],
+					[176,144, "QCIF"],
+					[160,128, "QSIF"],
+					]:
+					menu.append(make_menu_item("%dx%d %s" % (dim[0],dim[1],dim[2]), self.set_dim, dim[0:2]))
+					if self.width == dim[0] and self.height == dim[1]:
+						menudefault = i
+					i += 1
 			# enumerate video standards
 
 			hbox = gtk.HBox(False, 10)
