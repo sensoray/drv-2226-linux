@@ -4719,10 +4719,6 @@ static int vidioc_s_input(struct file *file, void *priv, unsigned int i)
 static int mpeg_queryctrl(u32 id, struct v4l2_queryctrl *ctrl)
 {
 	int i;
-	static const u32 user_ctrls[] = {
-		V4L2_CID_USER_CLASS,
-		0
-	};
 	// must be in increasing order
 	static const u32 mpeg_ctrls[] = {
 		V4L2_CID_MPEG_CLASS,
@@ -4736,7 +4732,6 @@ static int mpeg_queryctrl(u32 id, struct v4l2_queryctrl *ctrl)
 		0
 	};
 	static const u32 *ctrl_classes[] = {
-		user_ctrls,
 		mpeg_ctrls,
 		NULL
 	};
