@@ -10,6 +10,8 @@
  * @date: 2009-2012
  */
 
+// Sensoray local backward compatible version.  not for kernel submission
+
 #include <linux/version.h>
 #if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 18)
 #include <linux/config.h>
