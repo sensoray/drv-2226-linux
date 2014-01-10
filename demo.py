@@ -522,14 +522,7 @@ class Demo:
 	
 	def set_ctrl(self, widget, id):
 		value = int(widget.value)
-		if V4L2_CTRL_ID2CLASS(id) == V4L2_CTRL_CLASS_USER:
-			ctrl = v4l2_control()
-			ctrl.id = id
-			ctrl.value = value
-			dprint("new ctrl", id, "is", ctrl.value)
-			try: ioctl(self.vd, VIDIOC_S_CTRL, ctrl)
-			except IOError: print "unable to set control"
-		else:
+		if V4L2_CTRL_ID2CLASS(id) != V4L2_CTRL_CLASS_USER:
 			ctrl = v4l2_ext_control()
 			ctrl.id = id
 			ctrl.value = value
@@ -538,8 +531,16 @@ class Demo:
 			ctrls.count = 1
 			ctrls.controls = ctypes.pointer(ctrl)
 			dprint("new ext ctrl", id, "is", ctrl.value)
-			try: ioctl(self.vd, VIDIOC_S_EXT_CTRLS, ctrls)
-			except IOError: print "unable to set ext control"
+			try: 
+				ioctl(self.vd, VIDIOC_S_EXT_CTRLS, ctrls)
+				return ctrl.value
+			except IOError: pass
+		ctrl = v4l2_control()
+		ctrl.id = id
+		ctrl.value = value
+		dprint("new ctrl", id, "is", ctrl.value)
+		try: ioctl(self.vd, VIDIOC_S_CTRL, ctrl)
+		except IOError: print "unable to set control"
 		return ctrl.value
 
 	def get_ctrl(self, cid):
@@ -1040,53 +1041,6 @@ class Demo:
 				vbox.pack_start(hbox, False, False, 0)
 				hbox.show()
 
-			# create a option menu for video frame sizes
-
-			if cp.capabilities & V4L2_CAP_VIDEO_CAPTURE:
-				format = v4l2_format()
-				format.type = V4L2_BUF_TYPE_VIDEO_CAPTURE
-				try: ioctl(self.vd, VIDIOC_G_FMT, format)
-				except: pass
-
-				dprint("current format is 0x%08x" % format.fmt.pix.pixelformat)
-				self.outfmt = format.fmt.pix.pixelformat
-				self.width = format.fmt.pix.width
-				self.height = format.fmt.pix.height
-				dprint("current size is ", self.width, self.height)
-
-				hbox = gtk.HBox(False, 10)
-				label = gtk.Label("Size:")
-				hbox.pack_start(label, False, False, 0)
-				label.show()
-
-				opt = gtk.OptionMenu()
-				menu = gtk.Menu()
-				menudefault = 0
-				i = 0
-				for dim in [
-					[720,576, "D1 PAL"],
-					[704,576, "D1 PAL "],
-					[720,480, "D1 NTSC "],
-					[704,480, "D1 NTSC"],
-					[640,480, "VGA"],
-					[352,288, "CIF"],
-					[320,240, "SIF"],
-					[176,144, "QCIF"],
-					[160,128, "QSIF"],
-					]:
-					menu.append(make_menu_item("%dx%d %s" % (dim[0],dim[1],dim[2]), self.set_dim, dim[0:2]))
-					if self.width == dim[0] and self.height == dim[1]:
-						menudefault = i
-					i += 1
-
-				opt.set_menu(menu)
-				opt.set_history(menudefault)
-				hbox.pack_start(opt, False, False, 0)
-				opt.show()
-
-				vbox.pack_start(hbox, False, False, 0)
-				hbox.show()
-
 			# enumerate video standards
 
 			hbox = gtk.HBox(False, 10)
@@ -1221,6 +1175,7 @@ class Demo:
 					notebook.append_page(cbox, gtk.Label(queryctrl.name))
 					cbox.show()
 					cbox.set_spacing(-15)
+					dprint("enumerated class:", queryctrl.name, queryctrl.type)
 					
 
 					#hbox = gtk.HBox(False, 10)

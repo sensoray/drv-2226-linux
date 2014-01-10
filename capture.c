@@ -666,7 +666,7 @@ init_device                     (void)
 
 
 	/* Select video input, video standard and tune here. */
-
+#if 0	// not used for 2226
 	{
 		int index = G_svideo ? 1 : 0;
 
@@ -695,10 +695,11 @@ init_device                     (void)
 			fprintf(stderr, "Using PAL standard\n");
 		}
 	}
+#endif
 
 	{
 		struct v4l2_input input;
-		int current;
+		__u32 current;
 
 		if (-1 == ioctl (fd, VIDIOC_G_INPUT, &current)) {
 		        perror ("VIDIOC_G_INPUT");
