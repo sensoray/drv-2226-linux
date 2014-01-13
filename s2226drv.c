@@ -245,6 +245,7 @@ struct s2226_dev {
 	wait_queue_head_t       write_vid_wq;
 	struct MODE2226		h51_mode;
 	int			cur_input;
+	int                     cur_audiompeg; // current audio input (for mpeg)
 	int                     is_decode; // set to decode input
 	int                     input_set;
 	unsigned                id; // message id
@@ -300,6 +301,12 @@ struct s2226_dev {
 #define    S2226_INPUT_SDI_1080P_24    16
 #define    S2226_INPUT_SDI_1080P_2398  17
 #define    S2226_INPUT_MAX             18
+
+// MPEG audio source
+#define    S2226_AUDIOINPUT_LINE       0
+#define    S2226_AUDIOINPUT_TONE       1 // test tone
+#define    S2226_AUDIOINPUT_SDI        2 // SDI-IN embedded audio
+#define    S2226_AUDIOINPUT_MAX        3
 
 /* maximum size of URB buffers */
 #define MAX_USB_SIZE (16*1024)
@@ -1849,12 +1856,10 @@ static int s2226_new_input(struct s2226_dev *dev, int input)
 	case INPUT_SDI_1080I_50:
 	case INPUT_SDI_1080I_50_CB:
 	default:
-		//(void) s2226_set_attr(dev, ATTR_INPUT_DELAY, 500);
 		break;
 	case INPUT_H51_SD_576I:
 	case INPUT_H51_SD_480I:
 		is_decode = 1;
-		//(void) s2226_set_attr(dev, ATTR_INPUT_DELAY, 500);
 		break;
 	case INPUT_H51_HD_1080I_50:
 	case INPUT_H51_HD_1080I_5994:
@@ -1863,7 +1868,6 @@ static int s2226_new_input(struct s2226_dev *dev, int input)
 	case INPUT_H51_HD_720P_5994:
 	case INPUT_H51_HD_720P_60:
 		is_decode = 1;
-		//(void) s2226_set_attr(dev, ATTR_INPUT_DELAY, 650);
 		break;
 	}
 	dev->cur_input = input;
@@ -1894,6 +1898,38 @@ static int s2226_new_input(struct s2226_dev *dev, int input)
 #endif
 
 	return 0;
+}
+
+#define S2226_REG_AUD_INPK_CTL  (0x015<<1)
+
+int s2226_set_audiomux_mpegin(struct s2226_dev *dev, int aud)
+{
+	int reg;
+	int rc;
+	rc = get_reg(dev, DEVID_FPGA, S2226_REG_AUD_INPK_CTL, &reg);
+	if (rc != 0) {
+		printk(KERN_WARNING "s2226 setaudio mux fail\n");
+	}
+	switch (aud) {
+	case S2226_AUDIOINPUT_LINE:
+		reg = reg & 0x010c;// Keep bit 8(GENCK),3, 2
+		reg = reg | 0x0000;// line in to MPEG in
+		break;
+	case S2226_AUDIOINPUT_TONE:
+		reg = reg & 0x010C; 
+		reg = reg | 0x00C2; // Tone test data to MPEG in
+		break;
+	case S2226_AUDIOINPUT_SDI:
+		reg = reg & 0x010C; 
+		reg = reg | 0x0042; // SDIiAud data to MPEG in
+		break;
+	default:
+		printk(KERN_INFO "s2226 setaudio mux, invalid input %d\n", aud);
+		return -EINVAL;
+		break;
+	}
+	rc = send_fpga_write(dev, S2226_REG_AUD_INPK_CTL, reg);
+	return rc;
 }
 
 
@@ -2107,6 +2143,7 @@ int s2226_ioctl(struct inode *inode, struct file *file,
 			return -EBUSY;
 		}
 		(void) s2226_set_attr(dev, ATTR_INPUT, dev->cur_input);
+		(void) s2226_set_audiomux_mpegin(dev, dev->cur_audiompeg);
 		ret = s2226_start_encode(dev, cmd.idx, S2226_CONTEXT_USBDEV);
 		return ret;
 	}
@@ -2427,6 +2464,7 @@ int s2226_ioctl(struct inode *inode, struct file *file,
 		} else {
 			dprintk(1, "input %d is not connected\n", (int)arg);
 		}
+		(void) s2226_set_audiomux_mpegin(dev, dev->cur_audiompeg);
 		break;
 	case S2226_IOC_GET_INPUT:
 		dprintk(3, "get input %d\n", (int)dev->cur_input);
@@ -3380,8 +3418,6 @@ static int s2226_default_params(struct s2226_dev *dev)
 	// switch to pktend mode for efficiency
 	rc = s2226_set_attr(dev, ATTR_INT_EP_PKTEND, 1);
 	if (rc != 0) return rc;
-	// make input delay 300ms
-	rc = s2226_set_attr(dev, ATTR_INPUT_DELAY, 300);
 	return rc;
 }
 
@@ -3850,6 +3886,9 @@ int s2226_get_fpga_ver(struct s2226_dev *dev)
 	dev->board_id = fwver >> 11;
 	return 0;
 }
+
+
+
 
 /*
  *  begin V4L code
@@ -4709,6 +4748,64 @@ static int vidioc_s_input(struct file *file, void *priv, unsigned int i)
 	return 0;
 }
 
+static int vidioc_enumaudio(struct file *file, void *priv,
+			    struct v4l2_audio *aud)
+{
+	int idx;
+	idx = aud->index;
+	if (idx >= S2226_AUDIOINPUT_MAX)
+		return -EINVAL;
+	memset(aud, 0, sizeof(struct v4l2_audio));
+	aud->index = idx;
+	switch (idx) {
+	case S2226_AUDIOINPUT_LINE:
+		strcpy(aud->name, "Line In");
+		break;
+	case S2226_AUDIOINPUT_TONE:
+		strcpy(aud->name, "Test Tone");
+		break;
+	case S2226_AUDIOINPUT_SDI:
+		strcpy(aud->name, "SDI Embedded Audio");
+		break;
+	}
+	return 0;
+}
+
+
+static int vidioc_g_audio(struct file *file, void *priv,
+			  struct v4l2_audio *aud)
+{
+	struct s2226_fh *fh = file->private_data;
+	struct s2226_dev *dev = fh->dev;
+	memset(aud, 0, sizeof(struct v4l2_audio));
+	switch (dev->cur_audiompeg) {
+	case S2226_AUDIOINPUT_LINE:
+		strcpy(aud->name, "Line In");
+		break;
+	case S2226_AUDIOINPUT_TONE:
+		strcpy(aud->name, "Test Tone");
+		break;
+	case S2226_AUDIOINPUT_SDI:
+		strcpy(aud->name, "SDI Embedded Audio");
+		break;
+	}
+	aud->index = dev->cur_audiompeg;
+	return 0;
+}
+
+static int vidioc_s_audio(struct file *file, void *priv,
+			  const struct v4l2_audio *aud)
+{
+	struct s2226_fh *fh = file->private_data;
+	struct s2226_dev *dev = fh->dev;
+	if (aud->index >= S2226_AUDIOINPUT_MAX)
+		return -EINVAL;
+	dev->cur_audiompeg = aud->index;
+	(void) s2226_set_audiomux_mpegin(dev, dev->cur_audiompeg);
+	return 0;
+}
+
+
 
 /* --- controls ---------------------------------------------- */
 static int mpeg_queryctrl(u32 id, struct v4l2_queryctrl *ctrl)
@@ -4985,6 +5082,9 @@ static const struct v4l2_ioctl_ops s2226_ioctl_ops = {
 	.vidioc_s_ctrl = vidioc_s_ctrl,
 	.vidioc_streamon = vidioc_streamon,
 	.vidioc_streamoff = vidioc_streamoff,
+	.vidioc_enumaudio = vidioc_enumaudio,
+	.vidioc_s_audio = vidioc_s_audio,
+	.vidioc_g_audio = vidioc_g_audio,
 #ifdef CONFIG_VIDEO_V4L1_COMPAT
 	.vidiocgmbuf = vidioc_cgmbuf,
 #endif
