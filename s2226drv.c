@@ -2187,6 +2187,7 @@ int s2226_ioctl(struct inode *inode, struct file *file,
 			printk(KERN_INFO "s2226: stream busy\n");
 			return -EBUSY;
 		}
+		(void) s2226_set_attr(dev, ATTR_INPUT, dev->cur_input);
 		ret = s2226_start_encode(dev, cmd.idx, S2226_CONTEXT_USBDEV);
 		return ret;
 	}
