@@ -2233,6 +2233,8 @@ int s2226_ioctl(struct inode *inode, struct file *file,
 		(void) s2226_set_attr(dev, ATTR_INPUT, dev->cur_input);
 		(void) s2226_set_audiomux_mpegin(dev, dev->cur_audiompeg);
 		ret = s2226_start_encode(dev, cmd.idx, S2226_CONTEXT_USBDEV);
+        if (ret != 0)
+            res_free(dev, fh, RES_STREAM);
 		return ret;
 	}
 	case S2226_IOC_STARTDECODE:
@@ -2248,6 +2250,8 @@ int s2226_ioctl(struct inode *inode, struct file *file,
 			return -EBUSY;
 		}
 		ret = s2226_start_decode(dev, cmd.idx);
+        if (ret != 0)
+            res_free(dev, fh, RES_STREAM);
 		return ret;
 	}
 	case S2226_IOC_STOPENCODE:
@@ -4620,6 +4624,7 @@ static int vidioc_cgmbuf(struct file *file, void *priv, struct video_mbuf *mbuf)
 }
 #endif
 
+static int s2226_new_v4l_input(struct s2226_dev *dev, int inp);
 
 static int vidioc_streamon(struct file *file, void *priv, enum v4l2_buf_type i)
 {
@@ -4646,6 +4651,10 @@ static int vidioc_streamon(struct file *file, void *priv, enum v4l2_buf_type i)
 	res = videobuf_streamon(&fh->vb_vidq);
 	if (res == 0) {
 		s2226_set_attr(dev, ATTR_INPUT, dev->cur_input);
+        if (dev->fpga_ver <= 0) {
+            s2226_get_fpga_ver(dev);
+            s2226_new_v4l_input(dev, dev->v4l_input);
+        }
 		s2226_start_encode(dev, 0, S2226_CONTEXT_V4L);
 	} else {
 		res_free(dev, fh, RES_STREAM);
