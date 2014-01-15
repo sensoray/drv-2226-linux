@@ -448,8 +448,6 @@ static void s2226_display_err(unsigned char err)
 static int s2226_send_msg_noresp(struct s2226_dev *dev)
 {
 	int rc;
-	unsigned char *buf;
-	buf = (unsigned char *) dev->control_buffer;
 	rc = write_control_endpoint(dev, S2226_BULKMSG_TO);
 	return rc;
 }
@@ -793,7 +791,6 @@ static int form_generic_regrd_u8(unsigned char *buf, unsigned int addr, unsigned
 static int get_reg(struct s2226_dev *dev, int devID,
 		   unsigned int addr, unsigned int *val)
 {
-	int rc;
 	unsigned char *buf;
 	int rsize;
 	s2226_mutex_lock(&dev->cmdlock);
@@ -825,7 +822,7 @@ static int get_reg(struct s2226_dev *dev, int devID,
 		s2226_mutex_unlock(&dev->cmdlock);
 		return -EINVAL;
 	}
-	rc = s2226_send_msg(dev, S2226_BULKMSG_TO);
+	(void) s2226_send_msg(dev, S2226_BULKMSG_TO);
 	buf = (unsigned char *) dev->interrupt_buffer;
 
 	dprintk(9, "buf %x %x %x %x %x %x %x %x\n",
@@ -2145,6 +2142,8 @@ int s2226_ioctl(struct inode *inode, struct file *file,
 		(void) s2226_set_attr(dev, ATTR_INPUT, dev->cur_input);
 		(void) s2226_set_audiomux_mpegin(dev, dev->cur_audiompeg);
 		ret = s2226_start_encode(dev, cmd.idx, S2226_CONTEXT_USBDEV);
+        if (ret != 0)
+            res_free(dev, fh, RES_STREAM);
 		return ret;
 	}
 	case S2226_IOC_STARTDECODE:
@@ -2160,6 +2159,8 @@ int s2226_ioctl(struct inode *inode, struct file *file,
 			return -EBUSY;
 		}
 		ret = s2226_start_decode(dev, cmd.idx);
+        if (ret != 0)
+            res_free(dev, fh, RES_STREAM);
 		return ret;
 	}
 	case S2226_IOC_STOPENCODE:
@@ -3905,7 +3906,6 @@ static int s2226_open_v4l(struct file *file)
 	struct s2226_dev *h, *dev = NULL;
 	struct s2226_fh *fh;
 	struct list_head *list;
-	enum v4l2_buf_type type = 0;
 	dprintk(1, "%s\n", __func__);
 
 	if (s2226_mutex_lock_interruptible(&s2226_devices_lock)) {
@@ -3917,7 +3917,6 @@ static int s2226_open_v4l(struct file *file)
 		h = list_entry(list, struct s2226_dev, s2226_devlist);
 		if (h->vdev->minor == minor) {
 			dev = h;
-			type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
 		}
 	}
 
@@ -4135,13 +4134,11 @@ static int s2226_got_data(struct s2226_dev *dev, int urb_idx)
 	unsigned long flags = 0;
 	char *vbuf;
 	struct timeval ts;
-	int rc = 0;
 	dprintk(4, "s2226_got_data: %p\n", &dma_q);
 	spin_lock_irqsave(&dev->slock, flags);
 
 	if (list_empty(&dma_q->active)) {
 		dprintk(3, "No active queue to serve\n");
-		rc = -1;
 		goto unlock;
 	}
 	buf = list_entry(dma_q->active.next,
@@ -4154,7 +4151,6 @@ static int s2226_got_data(struct s2226_dev *dev, int urb_idx)
 	vbuf = videobuf_to_vmalloc(&buf->vb);
 	if (vbuf == NULL) {
 		printk(KERN_ERR "%s vbuf error\n", __func__);
-		rc = -EINVAL;
 		goto unlock;
 	}
 
@@ -4463,6 +4459,7 @@ static int vidioc_cgmbuf(struct file *file, void *priv, struct video_mbuf *mbuf)
 }
 #endif
 
+static int s2226_new_v4l_input(struct s2226_dev *dev, int inp);
 
 static int vidioc_streamon(struct file *file, void *priv, enum v4l2_buf_type i)
 {
@@ -4489,6 +4486,10 @@ static int vidioc_streamon(struct file *file, void *priv, enum v4l2_buf_type i)
 	res = videobuf_streamon(&fh->vb_vidq);
 	if (res == 0) {
 		s2226_set_attr(dev, ATTR_INPUT, dev->cur_input);
+        if (dev->fpga_ver <= 0) {
+            s2226_get_fpga_ver(dev);
+            s2226_new_v4l_input(dev, dev->v4l_input);
+        }
 		s2226_start_encode(dev, 0, S2226_CONTEXT_V4L);
 	} else {
 		res_free(dev, fh, RES_STREAM);
