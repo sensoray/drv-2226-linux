@@ -43,10 +43,10 @@
 #include <media/v4l2-ioctl.h>
 #endif
 #endif
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 18) || V4L_DVB_TREE
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 18)
 #include <media/v4l2-dev.h>
 #endif
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 29) || V4L_DVB_TREE
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 29)
 #include <media/v4l2-device.h>
 #endif
 
@@ -344,7 +344,7 @@ struct s2226_dev {
 	int                     v4l_input;
 	spinlock_t		slock;
 	struct video_device     *vdev;
-#if LINUX_VERSION_CODE >= KERNEL_VERSION_V4L2DEV || V4L_DVB_TREE
+#if LINUX_VERSION_CODE >= KERNEL_VERSION_V4L2DEV
 	struct v4l2_device v4l2_dev;
 #endif
 	struct s2226_dmaqueue   vidq;
@@ -4749,7 +4749,7 @@ static int s2226_new_v4l_input(struct s2226_dev *dev, int inp)
 	return 0;
 }
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 26) || V4L_DVB_TREE
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 27)
 static int vidioc_g_std(struct file *file, void *priv, v4l2_std_id *i)
 {
 	struct s2226_fh *fh = priv;
@@ -4928,7 +4928,7 @@ static int vidioc_s_input(struct file *file, void *priv, unsigned int i)
 	s2226_new_v4l_input(dev, i);
 	return 0;
 }
-
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 27)
 static int vidioc_enumaudio(struct file *file, void *priv,
 			    struct v4l2_audio *aud)
 {
@@ -4974,7 +4974,8 @@ static int vidioc_g_audio(struct file *file, void *priv,
 	return 0;
 }
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 0, 0)
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 7, 0)
 static int vidioc_s_audio(struct file *file, void *priv,
 			  const struct v4l2_audio *aud)
 #else
@@ -4991,7 +4992,7 @@ static int vidioc_s_audio(struct file *file, void *priv,
 	return 0;
 }
 
-
+#endif
 
 /* --- controls ---------------------------------------------- */
 static int mpeg_queryctrl(u32 id, struct v4l2_queryctrl *ctrl)
@@ -5273,7 +5274,7 @@ static const struct v4l2_ioctl_ops s2226_ioctl_ops = {
 	.vidioc_qbuf = vidioc_qbuf,
 	.vidioc_dqbuf = vidioc_dqbuf,
 	.vidioc_s_std = vidioc_s_std,
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 32)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 27)
 	.vidioc_g_std = vidioc_g_std,
 #endif
 	.vidioc_enum_input = vidioc_enum_input,
@@ -5285,9 +5286,11 @@ static const struct v4l2_ioctl_ops s2226_ioctl_ops = {
 	.vidioc_s_ctrl = vidioc_s_ctrl,
 	.vidioc_streamon = vidioc_streamon,
 	.vidioc_streamoff = vidioc_streamoff,
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 27)
 	.vidioc_enumaudio = vidioc_enumaudio,
 	.vidioc_s_audio = vidioc_s_audio,
 	.vidioc_g_audio = vidioc_g_audio,
+#endif
 #ifdef CONFIG_VIDEO_V4L1_COMPAT
 	.vidiocgmbuf = vidioc_cgmbuf,
 #endif
@@ -5384,7 +5387,7 @@ static int s2226_probe_v4l(struct s2226_dev *dev)
 	/* register video device */
 	dev->vdev = video_device_alloc();
 	memcpy(dev->vdev, &template, sizeof(struct video_device));
-#if LINUX_VERSION_CODE >= KERNEL_VERSION_V4L2DEV || V4L_DVB_TREE
+#if LINUX_VERSION_CODE >= KERNEL_VERSION_V4L2DEV
 	dev->vdev->v4l2_dev = &dev->v4l2_dev;
 #elif LINUX_VERSION_CODE >= KERNEL_VERSION_V4L2_NEW_FOPS1
 	dev->vdev->parent = &dev->interface->dev;
@@ -5392,7 +5395,7 @@ static int s2226_probe_v4l(struct s2226_dev *dev)
 	dev->vdev->dev = &dev->interface->dev;
 #endif
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION_V4L2DEV || V4L_DVB_TREE
+#if LINUX_VERSION_CODE >= KERNEL_VERSION_V4L2DEV
 	ret = v4l2_device_register(&dev->interface->dev, &dev->v4l2_dev);
 	if (ret) {
 		printk(KERN_ERR "s2226 v4l2 device register fail\n");
@@ -5440,9 +5443,10 @@ static void s2226_exit_v4l(struct s2226_dev *dev)
 #ifdef CONFIG_S2226_V4L
 
 	struct list_head *list;
-
-#if LINUX_VERSION_CODE >= KERNEL_VERSION_V4L2DEV || V4L_DVB_TREE
+#if LINUX_VERSION_CODE > KERNEL_VERSION_V4L2DEV
 	v4l2_device_disconnect(&dev->v4l2_dev);
+#endif
+#if LINUX_VERSION_CODE >= KERNEL_VERSION_V4L2DEV
 	v4l2_device_unregister(&dev->v4l2_dev);
 #endif
 
