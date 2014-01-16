@@ -6,6 +6,8 @@
 /////////////////////////////////////////////////
 
 
+#define ARRAY_SIZE(arr) (sizeof(arr) / sizeof((arr)[0]))
+
 typedef int __int32;
 typedef short __int16;
 
@@ -36,16 +38,16 @@ void loadH51rb(H51_RB_SIZE *rb_size)
 
 	rb = (__int16 *) (rb_size + 1);
 	n = 0;
-	while (n*2 < sizeof(h51APRM))
+	while (n < ARRAY_SIZE(h51APRM))
 		*rb++ = h51APRM[n++][1];
 	n = 0;
-	while (n*2 < sizeof(h51IPRM))
+	while (n < ARRAY_SIZE(h51IPRM))
 		*rb++ = h51IPRM[n++][1];
 	n = 0;
-	while (n*2 < sizeof(h51IPRV))
+	while (n < ARRAY_SIZE(h51IPRV))
 		*rb++ = h51IPRV[n++][1];
 	n = 0;
-	while (n*2 < sizeof(h51IPRA))
+	while (n < ARRAY_SIZE(h51IPRA))
 		*rb++ = h51IPRA[n++][1];
 }
 

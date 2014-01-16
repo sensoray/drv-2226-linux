@@ -25,7 +25,7 @@ CFLAGS_DEMO = -Wall -Wcast-align -Wcast-qual  -D_LINUX -DSENSORAY_OS_LINUX -Iovl
 
 # if using V4L comment out line above and uncomment line below
 EXTRA_CFLAGS += -Wall -O2 -D_LINUX -DOSTYPE_LINUX -DDRIVER_BUILD -DOS_LINUX -DCONFIG_S2226_V4L
-EXTRA_CFLAGS += -fno-aggressive-loop-optimizations
+#EXTRA_CFLAGS += -fno-aggressive-loop-optimizations
 
 
 modules:
