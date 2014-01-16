@@ -10,7 +10,8 @@
  * @date: 2009-2014
  */
 
-// Sensoray local backward compatible version.  not for kernel submission
+
+/* Sensoray local backward compatible version.  not for kernel submission */
 
 #include <linux/version.h>
 #if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 18)
@@ -41,7 +42,6 @@
 #include <media/v4l2-common.h>
 #include <media/videobuf-vmalloc.h>
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 27)
-//#include "compat.h>
 #include <media/v4l2-ioctl.h>
 #endif
 #endif
@@ -63,13 +63,12 @@
 #include "dh2226.h"
 
 
-// TODO usb_xxx_msg timeouts changed at kernel version 2.6.10 or 2.6.11
-// find out which one exactly
+/* usb_xxx_msg timeouts changed at kernel version 2.6.10 or 2.6.11 */
 #if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 11)
 #define S2226_BULKMSG_TO msecs_to_jiffies(5000)
 #define S2226_FLASHERASE_TO msecs_to_jiffies(60000)
 #define S2226_FLASHWRITE_TO msecs_to_jiffies(9000)
-#define S2226_FLASHREAD_TO S2226_FLASHWRITE_TO 
+#define S2226_FLASHREAD_TO S2226_FLASHWRITE_TO
 #define S2226_SETMODE_TO msecs_to_jiffies(9000)
 #define S2226_SETINPUT_TO msecs_to_jiffies(20000)
 #define S2226_PRIMEFX2_TO msecs_to_jiffies(500)
@@ -105,7 +104,7 @@
 #define INDEX_EP_RAW     3 /* raw pipe (USB FW 0x20+ only) */
 
 
-// for backward compatibility
+/* for backward compatibility */
 #define KERNEL_VERSION_IOCTL_REMOVED       KERNEL_VERSION(2, 6, 36)
 #define KERNEL_VERSION_USBCOMPLETE_CHANGED KERNEL_VERSION(2, 6, 19)
 #define KERNEL_VERSION_MUTEX_ADDED         KERNEL_VERSION(2, 6, 16)
@@ -113,7 +112,7 @@
 #define KERNEL_VERSION_V4L2_NEW_FOPS2      KERNEL_VERSION(2, 6, 29)
 #define KERNEL_VERSION_V4L2DEV KERNEL_VERSION(2, 6, 29)
 #if defined CONFIG_S2226_V4L
-#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,28)
+#if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 28)
 #define	V4L2_MPEG_VIDEO_ENCODING_MPEG_4_AVC 2
 #endif
 #endif
@@ -199,7 +198,6 @@ MODULE_PARM_DESC(video_nr, "start video minor(-1 default autodetect)");
 			printk(KERN_DEBUG "s2226: " fmt, ##arg);	\
 		}							\
 	} while (0)
-
 
 #define to_s2226_dev(d) container_of(d, struct s2226_dev, kref)
 
@@ -359,9 +357,6 @@ struct s2226_dev {
 	int ep[MAX_ENDPOINTS]; /* endpoint address */
 	int audio_page;
 };
-
-
-
 
 
 #define    S2226_INPUT_COMPOSITE_0     0
@@ -2631,23 +2626,6 @@ int s2226_ioctl(struct inode *inode, struct file *file,
 		ret = copy_to_user(argp, &cmd, sizeof(cmd));
 		break;
 	}
-#if 0
-	// 7121 is write only!
-	case S2226_IOC_VIDENC_RD:
-	{
-		audio_reg_t cmd;
-		unsigned char rval = 0;
-		if (copy_from_user(&cmd, argp, sizeof(cmd)))
-			return -EINVAL;
-		ret = send_vid_rd(dev, cmd.addr, &rval, DEVID_VIDENC);
-		if (ret < 0) return ret;
-		cmd.value = rval;
-		ret = copy_to_user(argp, &cmd, sizeof(cmd));
-		dprintk(3, "ioc_videnc_rd  %d %x\n", cmd.addr, cmd.value);
-		break;
-	}
-#endif
-//	case S2226_IOC_RESET_H51:
 	case S2226_IOC_RESET_BOARD:
 		/* If resetting from user space, should do the following
 		   S2226_IOC_RESET_BOARD
@@ -2659,12 +2637,10 @@ int s2226_ioctl(struct inode *inode, struct file *file,
 	case S2226_IOC_ARM_VER:
 		ret = copy_to_user(argp, &dev->arm_ver, sizeof(cmd));
 		break;
-//	case S2226_IOC_FX2SAM_LO:
 	case S2226_IOC_SET_BASEFW:
 		ret = s2226_fx2sam(dev, 0);
 		dprintk(2, "%s FX2SAM_LO %d\n", __func__, ret);
 		break;
-//	case S2226_IOC_FX2SAM_HI:
 	case S2226_IOC_SET_NEWFW:
 		ret = s2226_fx2sam(dev, 1);
 		dprintk(2, "%s FX2SAM_HI %d\n", __func__, ret);
@@ -3011,7 +2987,7 @@ static ssize_t s2226_read_vid(struct file *file, char *buffer, size_t nbytes,
 
 	return S2226_RB_PKT_SIZE;
 }
-	
+
 #if LINUX_VERSION_CODE >= KERNEL_VERSION_USBCOMPLETE_CHANGED
 static void s2226_write_vid_callback(struct urb *u)
 #else
@@ -4517,23 +4493,11 @@ static int vidioc_s_fmt_vid_cap(struct file *file, void *priv,
 				struct v4l2_format *f)
 {
 	struct s2226_fh *fh = priv;
-//	const struct s2226_fmt *fmt;
-//#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 27)
-//	struct videobuf_queue *q = &fh->vb_vidq;
-//#endif
 	int ret;
 	printk(KERN_INFO "set fmt\n");
 	ret = vidioc_try_fmt_vid_cap(file, fh, f);
-
 	if (ret < 0)
 		return ret;
-//#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 27)
-//	s2226_mutex_lock(&q->vb_lock);
-//#endif
-
-//#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 27)
-//	s2226_mutex_unlock(&q->vb_lock);
-//#endif
 	return 0;
 }
 
@@ -5328,7 +5292,7 @@ static struct video_device template = {
 };
 #endif
 
-#endif //CONFIG_S2226_V4L
+#endif /* CONFIG_S2226_V4L */
 
 
 static int s2226_probe_v4l(struct s2226_dev *dev)
@@ -5386,7 +5350,7 @@ static int s2226_probe_v4l(struct s2226_dev *dev)
 	printk(KERN_INFO "Sensoray 2226 V4L driver\n"); /*todo add revision*/
 	return ret;
 #else
-	// no V4L, return, but initialize resources lock
+	/* no V4L, return, but initialize resources lock */
 	s2226_mutex_init(&dev->reslock);
 	return 0;
 #endif
