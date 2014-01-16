@@ -30,7 +30,7 @@
 #include <linux/sched.h>
 #include <linux/kref.h>
 #include <linux/vmalloc.h>
-#include <asm/uaccess.h>
+#include <linux/uaccess.h>
 #include <linux/usb.h>
 #include <linux/dma-mapping.h>
 #include <linux/highmem.h>
@@ -52,8 +52,8 @@
 #include <media/v4l2-device.h>
 #endif
 
-// update with each new version for easy detection of driver
-// version on embedded products (2420 for instance)
+/* update with each new version for easy detection of driver */
+/* version on embedded products (2420 for instance) */
 #define S2226_DRIVER_VERSION_STRING "V1.0.8: 03/18/2011"
 
 #include "s2226mod.h"
@@ -90,8 +90,8 @@
 #define S2226_MAX_VBITRATE 19000
 
 #define S2226_DEF_ABITRATE 256
-#define S2226_CONTEXT_USBDEV 0  // for /dev/s2226vX
-#define S2226_CONTEXT_V4L    1  // for /dev/videoX
+#define S2226_CONTEXT_USBDEV 0  /* for /dev/s2226vX */
+#define S2226_CONTEXT_V4L    1  /* for /dev/videoX */
 
 #define DRIVERNAME "s2226"
 
@@ -99,10 +99,10 @@
 #define USB_S2226_PRODUCT_ID  0x2226
 
 #define MAX_ENDPOINTS 4
-#define INDEX_EP_H264 0    // video in, video out.  endpoint index
-#define INDEX_EP_CONTROL 1 // control messages
-#define INDEX_EP_RESP    2 // responses
-#define INDEX_EP_RAW     3 // raw pipe (USB FW 0x20+ only)
+#define INDEX_EP_H264 0    /* video in, video out.  endpoint index */
+#define INDEX_EP_CONTROL 1 /* control messages */
+#define INDEX_EP_RESP    2 /* responses */
+#define INDEX_EP_RAW     3 /* raw pipe (USB FW 0x20+ only) */
 
 
 // for backward compatibility
@@ -140,19 +140,19 @@
 #endif
 
 /* table of devices that work with this driver */
-static struct usb_device_id s2226_table [] = {
+static struct usb_device_id s2226_table[] = {
 	{ USB_DEVICE(USB_S2226_VENDOR_ID, USB_S2226_PRODUCT_ID) },
 	{ }                                     /* Terminating entry */
 };
-MODULE_DEVICE_TABLE (usb, s2226_table);
+MODULE_DEVICE_TABLE(usb, s2226_table);
 
 /* Get a minor range for your devices from the usb maintainer */
 #define USB_S2226_MINOR_BASE    0
 
-static int debug = 0;
-static int filter_mode = 0; // 0 = autodetect, 1=fixed
-int *s2226_debug=&debug;
-int *s2226_filter_mode=&filter_mode;
+static int debug;
+static int filter_mode; /* 0 = autodetect, 1=fixed */
+int *s2226_debug = &debug;
+int *s2226_filter_mode = &filter_mode;
 
 #ifdef CONFIG_S2226_V4L
 static int majorv = 126;
@@ -161,9 +161,9 @@ static unsigned int vid_limit = 16;	/* Video memory limit, in Mb */
 static int video_nr = -1;	/* /dev/videoN, -1 for autodetect */
 #endif
 
-module_param(debug,int,0);
+module_param(debug, int, 0);
 MODULE_PARM_DESC(debug, "Debug level(0-4)");
-module_param(filter_mode,int,0);
+module_param(filter_mode, int, 0);
 MODULE_PARM_DESC(filter_mode, "filter mode(diagnostic only)");
 
 /*
@@ -176,16 +176,16 @@ MODULE_PARM_DESC(filter_mode, "filter mode(diagnostic only)");
 #define S2226_AUDIOMODE_AUTO_2420   1
 #define S2226_AUDIOMODE_AUTO_2226S  2
 static int audiomode = S2226_AUDIOMODE_AUTO_2226S;
-module_param(audiomode,int,0);
+module_param(audiomode, int, 0);
 MODULE_PARM_DESC(audiomode, "Audiomode (0-manual, 1-auto)");
 
 /* internal use only.  Will void warranty if mis-used */
 static int mfgmode = 1;
-module_param(mfgmode,int,0);
+module_param(mfgmode, int, 0);
 MODULE_PARM_DESC(mfgmode, "Mfg mode (0-off default) internal use.  do not change");
 
 #ifdef CONFIG_S2226_V4L
-module_param(majorv,int,0);
+module_param(majorv, int, 0);
 MODULE_PARM_DESC(majorv, "major for video devname");
 module_param(vid_limit, int, 0644);
 MODULE_PARM_DESC(vid_limit, "video memory limit(Mb)");
@@ -193,7 +193,7 @@ module_param(video_nr, int, 0644);
 MODULE_PARM_DESC(video_nr, "start video minor(-1 default autodetect)");
 #endif
 
-#define dprintk(level,fmt, arg...)					\
+#define dprintk(level, fmt, arg...)					\
 	do {								\
 		if (*s2226_debug >= (level)) {				\
 			printk(KERN_DEBUG "s2226: " fmt, ##arg);	\
@@ -213,9 +213,7 @@ static struct semaphore  s2226_devices_lock;
 
 #define MAX_CHANNELS 5
 
-/*
-  ring buffer: 
-*/
+/*  ring buffer: */
 #define S2226_RB_PKT_SIZE 4096
 #define WR_URBS		  8
 #define RD_URBS		  8
@@ -236,9 +234,9 @@ struct s2226_dmaqueue {
 };
 
 #define AUDIOROUTE_LINE1L S2226_AUDIOROUTE_LINE1L
-#define AUDIOROUTE_LINE2L S2226_AUDIOROUTE_LINE2L 
-#define AUDIOROUTE_LINE1L_BYPASS S2226_AUDIOROUTE_LINE1L_BYPASS 
-#define AUDIOROUTE_LINE2L_BYPASS S2226_AUDIOROUTE_LINE2L_BYPASS 
+#define AUDIOROUTE_LINE2L S2226_AUDIOROUTE_LINE2L
+#define AUDIOROUTE_LINE1L_BYPASS S2226_AUDIOROUTE_LINE1L_BYPASS
+#define AUDIOROUTE_LINE2L_BYPASS S2226_AUDIOROUTE_LINE2L_BYPASS
 static int SetAudioIn(struct s2226_dev *dev);
 static int SetAudioRoute(struct s2226_dev *dev, int route);
 static int SetAudioOut(struct s2226_dev *dev);
@@ -257,7 +255,7 @@ struct s2226_audio {
 	int iAGCLeftGain;
 	int iRightGain;
 	int iLeftGain;
-	// audio output gains and balance settings
+	/* audio output gains and balance settings */
 	int iVolGainR;
 	int iVolGainL;
 	int bVolMuteR;
@@ -293,8 +291,8 @@ struct s2226_dev {
 #else
 	struct semaphore        audlock;
 #endif
-	struct usb_device	*udev;		// our USB device
-	struct usb_interface	*interface;	// usb interface
+	struct usb_device	*udev;
+	struct usb_interface	*interface;
 	struct kref		kref;
 	int			h51_state;
 	int			persona;
@@ -312,10 +310,10 @@ struct s2226_dev {
 	wait_queue_head_t       write_vid_wq;
 	struct MODE2226		h51_mode;
 	int			cur_input;
-	int                     cur_audiompeg; // current audio input (for mpeg)
-	int                     is_decode; // set to decode input
+	int                     cur_audiompeg; /* current audio input */
+	int                     is_decode; /* set to decode input */
 	int                     input_set;
-	unsigned                id; // message id
+	unsigned                id; /* message id */
 #if LINUX_VERSION_CODE >= KERNEL_VERSION_MUTEX_ADDED
 	struct mutex            cmdlock;
 #else
@@ -337,12 +335,12 @@ struct s2226_dev {
 	int                     contrast;
 	int			resources;
 #if LINUX_VERSION_CODE >= KERNEL_VERSION_MUTEX_ADDED
-	struct mutex            reslock; // resource lock(V4L)
+	struct mutex            reslock; /* resource lock(V4L) */
 #else
-	struct semaphore        reslock; // resource lock(V4L)
+	struct semaphore        reslock; /* resource lock(V4L) */
 #endif
 #ifdef CONFIG_S2226_V4L
-	int                     v4l_is_pal; // is PAL standard
+	int                     v4l_is_pal; /* is PAL standard */
 	int                     v4l_input;
 	spinlock_t		slock;
 	struct video_device     *vdev;
@@ -358,7 +356,7 @@ struct s2226_dev {
 	struct s2226_audio      aud;
 	int h51_reload_required;
 	int usb_ver;
-	int ep[MAX_ENDPOINTS]; // endpoint address
+	int ep[MAX_ENDPOINTS]; /* endpoint address */
 	int audio_page;
 };
 
@@ -374,9 +372,9 @@ struct s2226_dev {
 #define    S2226_INPUT_720P_COLORBARS  5
 #define    S2226_INPUT_1080I_COLORBARS 6
 #define    S2226_INPUT_SDI_SD          7
-#define    S2226_INPUT_SDI_720P_5994   8 
+#define    S2226_INPUT_SDI_720P_5994   8
 #define    S2226_INPUT_SDI_720P_60     9
-#define    S2226_INPUT_SDI_1080I_50    10  
+#define    S2226_INPUT_SDI_1080I_50    10
 #define    S2226_INPUT_SDI_1080I_5994  11
 #define    S2226_INPUT_SDI_1080I_60    12
 #define    S2226_INPUT_SDI_720P_50     13
@@ -386,15 +384,15 @@ struct s2226_dev {
 #define    S2226_INPUT_SDI_1080P_2398  17
 #define    S2226_INPUT_MAX             18
 
-// MPEG audio source
+/* MPEG audio source */
 #define    S2226_AUDIOINPUT_LINE       0
-#define    S2226_AUDIOINPUT_TONE       1 // test tone
-#define    S2226_AUDIOINPUT_SDI        2 // SDI-IN embedded audio
+#define    S2226_AUDIOINPUT_TONE       1 /* test tone */
+#define    S2226_AUDIOINPUT_SDI        2 /* SDI-IN embedded audio */
 #define    S2226_AUDIOINPUT_MAX        3
 
 /* maximum size of URB buffers */
 #define MAX_USB_SIZE (16*1024)
-#define MAX_USB_INT_SIZE 512	// interrupt
+#define MAX_USB_INT_SIZE 512	/* interrupt */
 
 #ifdef CONFIG_S2226_V4L
 #define S2226_BUFFER_SIZE (S2226_RB_PKT_SIZE)
@@ -404,7 +402,6 @@ struct s2226_dev {
 struct s2226_buffer {
 	/* common v4l buffer stuff -- must be first */
 	struct videobuf_buffer vb;
-//	const struct s2226_fmt *fmt;
 };
 #endif
 
@@ -425,34 +422,35 @@ static int res_get(struct s2226_dev *dev, struct s2226_fh *fh, int res);
 static void res_free(struct s2226_dev *dev, struct s2226_fh *fh, int res);
 static int res_check(struct s2226_fh *fh);
 static int res_locked(struct s2226_dev *dev, struct s2226_fh *fh);
-void s2226_sleep( int ms);
+void s2226_sleep(int ms);
 static int write_control_endpoint(struct s2226_dev *dev, int timeout);
 static int read_interrupt_endpoint(struct s2226_dev *dev, int timeout);
 static int s2226_get_attr(struct s2226_dev *dev, int attr, int *value);
-extern int setH51regs (struct MODE2226 *mode);
+extern int setH51regs(struct MODE2226 *mode);
 extern void loadH51rb(H51_RB_SIZE *rb_size);
 #if LINUX_VERSION_CODE >= KERNEL_VERSION_USBCOMPLETE_CHANGED
 static void s2226_read_vid_callback(struct urb *u);
 #else
 static void s2226_read_vid_callback(struct urb *u, struct pt_regs *ptregs);
 #endif
-
 int s2226_vendor_request(void *pdev, unsigned char req,
 			 unsigned short idx, unsigned short val,
 			 void *pbuf, unsigned int len,
 			 int bOut);
-static int send_sdi_write(struct s2226_dev *dev, unsigned char addr, unsigned char val, int bIn);
+static int send_sdi_write(struct s2226_dev *dev, unsigned char addr,
+			  unsigned char val, int bIn);
 static int send_persona_run(struct s2226_dev *dev, unsigned char persona);
 static int send_persona_halt(struct s2226_dev *dev);
 static int s2226_flush_in_ep(struct s2226_dev *dev);
 static int s2226_set_interface(struct s2226_dev *dev, int cfg, int alt);
 
-// for controlling which firmware is loaded.  see comments for
-// S2226_IOC_SET_BASEFW and S2226_IOC_SET_NEWFW in ioctl file.
+/* for controlling which firmware is loaded.  see comments for
+   S2226_IOC_SET_BASEFW and S2226_IOC_SET_NEWFW in ioctl file. */
 static int s2226_fx2sam(struct s2226_dev *dev, int bNewFw);
 
-// resets the ARM CPU to bring up all board devices(h51, FPGA, ARM)
-// except the FX2 usb chip in a fresh state
+/* resets the ARM CPU to bring up all board devices(h51, FPGA, ARM)
+   except the FX2 usb chip in a fresh state */
+
 static int s2226_reset_board(struct s2226_dev *dev);
 
 static int s2226_default_params(struct s2226_dev *dev);
@@ -467,9 +465,8 @@ static unsigned char compute_checksum(unsigned char *pdata, int len)
 {
 	int i;
 	unsigned char chksum = 0;
-	for (i = 0; i < len; i++) {
+	for (i = 0; i < len; i++)
 		chksum += pdata[i];
-	}
 	return chksum;
 }
 
@@ -534,7 +531,7 @@ static void s2226_display_err(unsigned char err)
 	return;
 }
 
-// this function must be called with cmdlock locked
+/* this function must be called with cmdlock locked */
 static int s2226_send_msg_noresp(struct s2226_dev *dev)
 {
 	int rc;
@@ -542,8 +539,8 @@ static int s2226_send_msg_noresp(struct s2226_dev *dev)
 	return rc;
 }
 
-// this function must be called with cmdlock locked
-// timeout is time to wait for response in ms
+/* this function must be called with cmdlock locked
+   timeout is time to wait for response in ms */
 static int s2226_send_msg(struct s2226_dev *dev, int timeout)
 {
 	int rc;
@@ -557,39 +554,38 @@ static int s2226_send_msg(struct s2226_dev *dev, int timeout)
 	if (rc < 0)
 		return rc;
 	rc = read_interrupt_endpoint(dev, timeout);
-	if (rc < 0) {
+	if (rc < 0)
 		return rc;
-	}
-	// normal reply structure
-	// buf[0]: INTYPE_CMDREPLY==1
-	// buf[1]: opcode
-	// buf[2]: echo ID
-	// buf[3..]: response
+	/* normal reply structure */
+	/*
+	  buf[0]: INTYPE_CMDREPLY==1
+	  buf[1]: opcode
+	  buf[2]: echo ID
+	  buf[3..]: response
+	*/
 	buf = (unsigned char *) dev->interrupt_buffer;
 	if (buf[0] != INTTYPE_CMDREPLY) {
 		rc = read_interrupt_endpoint(dev, timeout);
-		if (rc < 0) {
+		if (rc < 0)
 			return rc;
-		}
 	}
-	if (buf[0] != INTTYPE_CMDREPLY) {
+	if (buf[0] != INTTYPE_CMDREPLY)
 		return -EAGAIN;
-	}
-	// some error replies
-	// buf[0]: INTYPE_CMDREPLY==1
-	// buf[1]: 0  (same as NOP opcode, so check for NOP below)
-	// buf[2]: reason
+	/* some error replies
+	   buf[0]: INTYPE_CMDREPLY==1
+	   buf[1]: 0  (same as NOP opcode, so check for NOP below)
+	   buf[2]: reason */
 	if (buf[1] == 0 && buf[0] == 1 && cmd != 0) {
 		s2226_display_err(buf[2]);
-		return (S2226_ERR_BASE - buf[2]);
+		return S2226_ERR_BASE - buf[2];
 	}
 	if ((buf[1] != cmd) || (buf[2] != id)) {
 		printk(KERN_INFO "command mismatch, re-reading: %x:%x, %x:%x\n",
 		       buf[1], cmd, buf[2], id);
 		printk(KERN_INFO "%x %x %x %x %x %x\n",
 		       buf[0], buf[1], buf[2], buf[3], buf[4], buf[5]);
-		// wait for full timeout.  if mismatch, endpoint was
-		// already populated
+		/* wait for full timeout.  if mismatch, endpoint was
+		   already populated */
 		rc = read_interrupt_endpoint(dev, timeout);
 		if (rc < 0) {
 			printk(KERN_INFO "%s failed retry: %d\n", __func__, rc);
@@ -602,177 +598,186 @@ static int s2226_send_msg(struct s2226_dev *dev, int timeout)
 	}
 	if (buf[3] != 0) {
 		s2226_display_err(buf[3]);
-		return (S2226_ERR_BASE - buf[3]);
+		return S2226_ERR_BASE - buf[3];
 	}
-	// rc must be 0 to get here
+	/* rc must be 0 to get here */
 	return 0;
 }
 
-// assumes i counter initialized to 0
+/* assumes i counter initialized to 0 */
 #define fill_cmd_buf(buf, i, cmd, id)		\
-	buf[i++] = 0;				\
-	buf[i++] = cmd;				\
-	buf[i++] = id;				\
-	buf[i++] = 0;				
-	
+	do { \
+		buf[i++] = 0;			\
+		buf[i++] = cmd;			\
+		buf[i++] = id;			\
+		buf[i++] = 0;			\
+	} while (0)
+
 
 
 #define fill_cmd_buf_val32(buf, i, _val_)	\
-	buf[i++] = (_val_ >> 24) & 0xff;	\
-	buf[i++] = (_val_ >> 16) & 0xff;	\
-	buf[i++] = (_val_ >> 8) & 0xff;		\
-	buf[i++] = (_val_ & 0xff);			
+	do { \
+		buf[i++] = (_val_ >> 24) & 0xff;	\
+		buf[i++] = (_val_ >> 16) & 0xff;	\
+		buf[i++] = (_val_ >> 8) & 0xff;		\
+		buf[i++] = (_val_ & 0xff);		\
+	} while (0)
 
 
 #define fill_cmd_buf_val16(buf, i, _val_)	\
-	buf[i++] = (_val_ >> 8) & 0xff;		\
-	buf[i++] = (_val_ & 0xff);			
+	do { \
+		buf[i++] = (_val_ >> 8) & 0xff;	\
+		buf[i++] = (_val_ & 0xff);	\
+	} while (0)
 
 
 
-// form sdi write command
-// addr is sdi address to write to
-// val is value
-// bIn is 1 if writing to the SDI input chip, 0 if writing to the output chip
-static int send_sdi_write(struct s2226_dev *dev, unsigned char addr, unsigned char val, int bIn)
+/* form sdi write command
+   addr is sdi address to write to
+   val is value
+   bIn is 1 if writing to the SDI input chip,
+   0 if writing to the output chip */
+static int send_sdi_write(struct s2226_dev *dev, unsigned char addr,
+			  unsigned char val, int bIn)
 {
-	int i=0;
-	unsigned char *buf= dev->control_buffer;
+	int i = 0;
+	unsigned char *buf = dev->control_buffer;
 	unsigned char id;
 	int rc;
-	s2226_mutex_lock(&dev->cmdlock);    
+	s2226_mutex_lock(&dev->cmdlock);
 	id = dev->id++;
 	fill_cmd_buf(buf, i, HOSTCMD_REGWRITE, id);
 	buf[i++] = bIn ? DEVID_SDI_IN : DEVID_SDI_OUT;
-	buf[i++] = 1; //mode (no address increment, 8 bit values)
-	buf[i++] = 0; // values (MSB)
-	buf[i++] = 1; // 1 8 bit data field present
-	buf[i++] = 0; // MSB of addr(32 bits in command)
+	buf[i++] = 1; /* mode (no address increment, 8 bit values) */
+	buf[i++] = 0; /* values (MSB) */
+	buf[i++] = 1; /* 1 8 bit data field present */
+	buf[i++] = 0; /* MSB of addr(32 bits in command) */
 	buf[i++] = 0;
 	buf[i++] = 0;
 	buf[i++] = addr;
 	buf[i++] = val;
 	buf[0] = (unsigned char) i;
 	dprintk(4, "%s: %x:%x\n", __func__, addr, val);
-	buf[i++] = compute_checksum(buf,buf[0]);
+	buf[i++] = compute_checksum(buf, buf[0]);
 	rc = s2226_send_msg(dev, S2226_BULKMSG_TO);
 	s2226_mutex_unlock(&dev->cmdlock);
 	return rc;
 }
 
 
-// form sdi read command
-// addr is sdi address to read from
-// bIn is 1 if writing to the SDI input chip, 0 if writing to the output chip
-static int form_sdi_read(unsigned char *buf, unsigned char addr, int bIn, unsigned char id)
+/* form sdi read command
+   addr is sdi address to read from
+   bIn is 1 if writing to the SDI input chip, 0 if writing to the output chip */
+static int form_sdi_read(unsigned char *buf, unsigned char addr,
+			 int bIn, unsigned char id)
 {
 	int i = 0;
 	fill_cmd_buf(buf, i, HOSTCMD_REGREAD, id);
 	buf[i++] = bIn ? DEVID_SDI_IN : DEVID_SDI_OUT;
-	buf[i++] = 1; //mode (no address increment, 8 bit values)
-	buf[i++] = 0; // values (MSB)
-	buf[i++] = 1; // no data present
-	buf[i++] = 0; // MSB of addr(32 bits in command)
+	buf[i++] = 1; /* mode (no address increment, 8 bit values) */
+	buf[i++] = 0; /* values (MSB) */
+	buf[i++] = 1; /* no data present */
+	buf[i++] = 0; /* MSB of addr(32 bits in command) */
 	buf[i++] = 0;
 	buf[i++] = 0;
 	buf[i++] = addr;
 	buf[0] = (unsigned char) i;
 	dprintk(4, "%s: %x\n", __func__, addr);
-	buf[i++] = compute_checksum(buf,buf[0]);
+	buf[i++] = compute_checksum(buf, buf[0]);
 	return i;
 }
 
-// form FPGA write command
-// addr is FPGA address to write to
-// val is value
-// bIn is 1 if writing to the SDI input chip, 0 if writing to the output chip
-static int send_fpga_write(struct s2226_dev *dev, unsigned int addr, unsigned int val)
+/* form FPGA write command
+   addr is FPGA address to write to
+   val is value
+   bIn is 1 if writing to the SDI input chip, 0 if writing to the output chip */
+static int send_fpga_write(struct s2226_dev *dev, unsigned int addr,
+			   unsigned int val)
 {
-	int i=0;
-	unsigned char *buf= dev->control_buffer;
+	int i = 0;
+	unsigned char *buf = dev->control_buffer;
 	unsigned char id;
 	int rc;
-	s2226_mutex_lock(&dev->cmdlock);    
+	s2226_mutex_lock(&dev->cmdlock);
 	id = dev->id++;
 	fill_cmd_buf(buf, i, HOSTCMD_REGWRITE, id);
 	buf[i++] = DEVID_FPGA;
-	buf[i++] = 2; //mode (no address increment, 16 bit values)
-	buf[i++] = 0; // values (MSB)
-	buf[i++] = 1; // 1 16 bit data field present
-	buf[i++] = 0; // MSB of addr(32 bits in command)
+	buf[i++] = 2; /* mode (no address increment, 16 bit values) */
+	buf[i++] = 0; /* values (MSB) */
+	buf[i++] = 1; /* 1 16 bit data field present */
+	buf[i++] = 0; /* MSB of addr(32 bits in command) */
 	buf[i++] = 0;
 	fill_cmd_buf_val16(buf, i, addr);
 	fill_cmd_buf_val16(buf, i, val);
 	buf[0] = (unsigned char) i;
 	dprintk(2, "%s: %x:%x\n", __func__, addr, val);
-	buf[i++] = compute_checksum(buf,buf[0]);
+	buf[i++] = compute_checksum(buf, buf[0]);
 	rc = s2226_send_msg(dev, S2226_BULKMSG_TO);
-	s2226_mutex_unlock(&dev->cmdlock);    
+	s2226_mutex_unlock(&dev->cmdlock);
 	return rc;
 }
 
 #define FPGA_WRITE_NORMAL     0
 #define FPGA_WRITE_FAST       1
 #define FPGA_WRITE_ADDRDATA   2
-// Note: length can not be greater than 256-14(14 for the header size plus 
-// checksum) if firmware under 0x44.
-// If firmware > 0x44, length can't be greater than 512-14
-// type == 0 (normal write)
-// type == 1 (fast write)
-// type == 2 (addrdata)
-static int send_fpga_write_burst(struct s2226_dev *dev, unsigned int addr, unsigned char *data, int len, int type)
+/* Note: length can not be greater than 256-14
+   (14 for the header size plus checksum) if firmware under 0x44.
+   If firmware > 0x44, length can't be greater than 512-14
+   type == 0 (normal write)
+   type == 1 (fast write)
+   type == 2 (addrdata) */
+static int send_fpga_write_burst(struct s2226_dev *dev, unsigned int addr,
+				 unsigned char *data, int len, int type)
 {
-	int i=0;
+	int i = 0;
 	int siz;
 	int j;
-	unsigned char *buf= dev->control_buffer;
+	unsigned char *buf = dev->control_buffer;
 	unsigned char id;
 	int rc;
-	s2226_mutex_lock(&dev->cmdlock); 
+	s2226_mutex_lock(&dev->cmdlock);
 	id = dev->id++;
 	fill_cmd_buf(buf, i, HOSTCMD_REGWRITE, id);
 	buf[i++] = DEVID_FPGA;
-	buf[i] = 2; //mode (no address increment, 16 bit values)
-	if (type == FPGA_WRITE_FAST) 
+	buf[i] = 2; /* mode (no address increment, 16 bit values) */
+	if (type == FPGA_WRITE_FAST)
 		buf[i] |= (REG_UNPACK_ENABLE | REG_NORESP_ENABLE);
 	else if (type == FPGA_WRITE_ADDRDATA)
 		buf[i] |= (REG_ADDRDATA_MODE | REG_NORESP_ENABLE);
 
 	i++;
-	buf[i++] = 0; // values (MSB)
+	buf[i++] = 0; /* values (MSB) */
 	buf[i++] = len / 2;
-	buf[i++] = 0; // MSB of addr(32 bits in command)
+	buf[i++] = 0; /* MSB of addr(32 bits in command) */
 	buf[i++] = 0;
 	fill_cmd_buf_val16(buf, i, addr);
-	// values
+	/* values */
 	for (j = 0; j < len; j++)
 		buf[i++] = data[j];
-	// Firmware 0x44 and above supports extended commands(larger than 256) use reserved field 
-	// for MSB
+	/* Firmware 0x44 and above supports extended commands
+	   (larger than 256) use reserved field for MSB */
 	buf[0] = (unsigned char) i & 0xff;
 	buf[3] = (unsigned char) ((i >> 8) & 0xff);
-
 	siz = i + 1;
 	dprintk(2, "%s: %x\n", __func__, addr);
 	buf[i++] = compute_checksum(buf, siz - 1);
-	
 	if (type == FPGA_WRITE_NORMAL)
 		rc = s2226_send_msg(dev, S2226_BULKMSG_TO);
 	else
 		rc = s2226_send_msg_noresp(dev);
-	
-	s2226_mutex_unlock(&dev->cmdlock);    
+	s2226_mutex_unlock(&dev->cmdlock);
 	return rc;
 }
 
 
 
-// Note: length can not be greater than 256-14(14 for the header size plus 
-// checksum).
-static int send_fpga_read_burst(struct s2226_dev *dev, unsigned int addr, unsigned char *data, int len)
+/* Note: length can not be greater than
+   256-14(14 for the header size plus checksum). */
+static int send_fpga_read_burst(struct s2226_dev *dev, unsigned int addr,
+				unsigned char *data, int len)
 {
-	int i=0;
-	unsigned char *buf= dev->control_buffer;
+	int i = 0;
+	unsigned char *buf = dev->control_buffer;
 	unsigned char id;
 	int rc;
 	if (len > 508)
@@ -781,97 +786,98 @@ static int send_fpga_read_burst(struct s2226_dev *dev, unsigned int addr, unsign
 	id = dev->id++;
 	fill_cmd_buf(buf, i, HOSTCMD_REGREAD, id);
 	buf[i++] = DEVID_FPGA;
-	buf[i++] = 2; //mode (no address increment, 16 bit values)
-	buf[i++] = 0; // values (MSB)
+	buf[i++] = 2; /* mode (no address increment, 16 bit values) */
+	buf[i++] = 0; /* values (MSB) */
 	buf[i++] = (len / 2);
-	buf[i++] = 0; // MSB of addr(32 bits in command)
+	buf[i++] = 0; /* MSB of addr(32 bits in command) */
 	buf[i++] = 0;
 	fill_cmd_buf_val16(buf, i, addr);
 	buf[0] = (unsigned char) i;
 	dprintk(2, "%s: %x\n", __func__, addr);
-	buf[i++] = compute_checksum(buf,buf[0]);
+	buf[i++] = compute_checksum(buf, buf[0]);
 	rc = s2226_send_msg(dev, S2226_BULKMSG_TO);
-	s2226_mutex_unlock(&dev->cmdlock);    
+	s2226_mutex_unlock(&dev->cmdlock);
 	if (rc != 0)
 		return rc;
 	buf = (unsigned char *) dev->interrupt_buffer;
-//	printk("buf[0-3] %x %x %x %x\n", buf[0], buf[1], buf[2], buf[3]);
-//	printk("buf[4-7] %x %x %x %x\n", buf[0+4], buf[1+4], buf[2+4], buf[3+4]);
 	memcpy(data, buf+4, len);
 	return rc;
 }
 
 
-// form fpga read command
-// addr is fpga address to read from
-static int form_fpga_read(unsigned char *buf, unsigned int addr, unsigned char id)
+/* form fpga read command
+   addr is fpga address to read from */
+static int form_fpga_read(unsigned char *buf, unsigned int addr,
+			  unsigned char id)
 {
 	int i = 0;
 	fill_cmd_buf(buf, i, HOSTCMD_REGREAD, id);
 	buf[i++] = DEVID_FPGA;
-	buf[i++] = 2; //mode (no address increment, 16 bit values)
-	buf[i++] = 0; // values (MSB)
-	buf[i++] = 1; // 1 value
-	buf[i++] = 0; // MSB of addr(32 bits in command)
+	buf[i++] = 2; /* mode (no address increment, 16 bit values) */
+	buf[i++] = 0; /* values (MSB) */
+	buf[i++] = 1; /* 1 value */
+	buf[i++] = 0; /* MSB of addr(32 bits in command) */
 	buf[i++] = 0;
 	fill_cmd_buf_val16(buf, i, addr);
 	buf[0] = (unsigned char) i;
 	dprintk(4, "%s: %x\n", __func__, addr);
-	buf[i++] = compute_checksum(buf,buf[0]);
+	buf[i++] = compute_checksum(buf, buf[0]);
 	return i;
 }
 
-static int send_h51_regwr(struct s2226_dev *dev, unsigned int addr, unsigned int val)
+static int send_h51_regwr(struct s2226_dev *dev, unsigned int addr,
+			  unsigned int val)
 {
-	int i=0;
-	unsigned char *buf= dev->control_buffer;
+	int i = 0;
+	unsigned char *buf = dev->control_buffer;
 	unsigned char id;
 	int rc;
-	s2226_mutex_lock(&dev->cmdlock);    
+	s2226_mutex_lock(&dev->cmdlock);
 	id = dev->id++;
 	fill_cmd_buf(buf, i, HOSTCMD_REGWRITE, id);
-	buf[i++] = DEVID_H51; //device ID
-	buf[i++] = 2; //mode (value size)
-	buf[i++] = 0; // values (MSB)
-	buf[i++] = 1; // values (LSB)
+	buf[i++] = DEVID_H51; /* device ID */
+	buf[i++] = 2; /* mode (value size) */
+	buf[i++] = 0; /* values (MSB) */
+	buf[i++] = 1; /* values (LSB) */
 	fill_cmd_buf_val32(buf, i, addr);
 	fill_cmd_buf_val16(buf, i, val);
 	buf[0] = (unsigned char) i;
-	dprintk(2, "H51: { 0x%08x,0x%04x},\n", addr, (unsigned int )val& 0xffff);
-	buf[i++] = compute_checksum(buf,buf[0]);
+	dprintk(2, "H51: { 0x%08x,0x%04x},\n", addr,
+		(unsigned int) val & 0xffff);
+	buf[i++] = compute_checksum(buf, buf[0]);
 	rc = s2226_send_msg(dev, S2226_BULKMSG_TO);
-	s2226_mutex_unlock(&dev->cmdlock);    
+	s2226_mutex_unlock(&dev->cmdlock);
 	return rc;
 }
 
 
-static int form_h51_regrd(unsigned char *buf, unsigned int addr, unsigned char id)
+static int form_h51_regrd(unsigned char *buf, unsigned int addr,
+			  unsigned char id)
 {
-	int i= 0;
+	int i = 0;
 	fill_cmd_buf(buf, i, HOSTCMD_REGREAD, id);
-	buf[i++] = DEVID_H51; //device ID
-	buf[i++] = 2; //mode (value size)
-	buf[i++] = 0; // values (MSB)
-	buf[i++] = 1; // values (LSB)
+	buf[i++] = DEVID_H51; /* device ID */
+	buf[i++] = 2; /* mode (value size) */
+	buf[i++] = 0; /* values (MSB) */
+	buf[i++] = 1; /* values (LSB) */
 	fill_cmd_buf_val32(buf, i, addr);
 	buf[0] = (unsigned char) i;
-	//printf("{ 0x%08lx,0x%04lx},\n", addr, (unsigned int )val& 0xffff);
-	buf[i++] = compute_checksum(buf,buf[0]);
+	buf[i++] = compute_checksum(buf, buf[0]);
 	return i;
 }
 
-static int form_generic_regrd_u8(unsigned char *buf, unsigned int addr, unsigned char id, int devid)
+static int form_generic_regrd_u8(unsigned char *buf, unsigned int addr,
+				 unsigned char id, int devid)
 {
-	int i= 0;
+	int i = 0;
 	fill_cmd_buf(buf, i, HOSTCMD_REGREAD, id);
-	buf[i++] = devid; //device ID
-	buf[i++] = 1; //mode (value size)
-	buf[i++] = 0; // values (MSB)
-	buf[i++] = 1; // values (LSB)
+	buf[i++] = devid; /*device ID */
+	buf[i++] = 1; /*mode (value size) */
+	buf[i++] = 0; /* values (MSB) */
+	buf[i++] = 1; /* values (LSB) */
 	fill_cmd_buf_val32(buf, i, addr);
 	buf[0] = (unsigned char) i;
-	//printf("{ 0x%08lx,0x%04lx},\n", addr, (unsigned int )val& 0xffff);
-	buf[i++] = compute_checksum(buf,buf[0]);
+	buf[i++] = compute_checksum(buf, buf[0]);
 	return i;
 }
 
@@ -885,28 +891,29 @@ static int get_reg(struct s2226_dev *dev, int devID,
 	int rsize;
 	s2226_mutex_lock(&dev->cmdlock);
 	switch (devID) {
-	case DEVID_AUDIO: //readable
-	case DEVID_SDI_SPLIT: // may be write-only like the 7121
-	case DEVID_VIDDEC: // readable
-	case DEVID_VIDENC: //Note: saa7121 is not readable
-		form_generic_regrd_u8(dev->control_buffer, addr, dev->id++, devID);
+	case DEVID_AUDIO: /*readable*/
+	case DEVID_SDI_SPLIT: /* may be write-only like the 7121 */
+	case DEVID_VIDDEC: /* readable */
+	case DEVID_VIDENC: /* Note: saa7121 is not readable */
+		form_generic_regrd_u8(dev->control_buffer, addr,
+				      dev->id++, devID);
 		rsize = 1;
 		break;
 	case DEVID_H51:
 		form_h51_regrd(dev->control_buffer, addr, dev->id++);
-		rsize = 2;// 2 bytes
+		rsize = 2;/* 2 bytes */
 		break;
 	case DEVID_FPGA:
 		form_fpga_read(dev->control_buffer, addr, dev->id++);
-		rsize = 2;// 2 bytes
+		rsize = 2;/* 2 bytes */
 		break;
 	case DEVID_SDI_IN:
 		form_sdi_read(dev->control_buffer, addr, 1, dev->id++);
-		rsize = 1;// 1 byte
+		rsize = 1;/* 1 byte */
 		break;
 	case DEVID_SDI_OUT:
 		form_sdi_read(dev->control_buffer, addr, 0, dev->id++);
-		rsize = 1;// 1 byte
+		rsize = 1;/* 1 byte */
 		break;
 	default:
 		s2226_mutex_unlock(&dev->cmdlock);
@@ -937,7 +944,7 @@ static int get_reg(struct s2226_dev *dev, int devID,
 
 static int send_h51_boot(struct s2226_dev *dev)
 {
-	int i=0;
+	int i = 0;
 	unsigned char *buf = dev->control_buffer;
 	int rc;
 	unsigned char id;
@@ -947,19 +954,19 @@ static int send_h51_boot(struct s2226_dev *dev)
 	buf[i++] = HOSTCMD_BOOT;
 	buf[i++] = id;
 	buf[i++] = 0;
-	buf[i++] = 0x00; //addr MSB
-	buf[i++] = 0x09; //addr
-	buf[i++] = 0x00; //addr
-	buf[i++] = 0x00; //addr LSB
-	buf[i++] = 0x00; //size MSB
-	buf[i++] = 0x00;//0x0a; //size
-	buf[i++] = 0x00;//0xf0; //size
-	buf[i++] = 0x00;//0xf4; //size LSB
+	buf[i++] = 0x00; /*addr MSB*/
+	buf[i++] = 0x09; /*addr*/
+	buf[i++] = 0x00; /*addr*/
+	buf[i++] = 0x00; /*addr LSB*/
+	buf[i++] = 0x00; /*size MSB*/
+	buf[i++] = 0x00;/*0x0a;*/ /*size*/
+	buf[i++] = 0x00;/*0xf0;*/ /*size*/
+	buf[i++] = 0x00;/*0xf4;*/ /**size LSB*/
 	buf[i++] = DEVID_H51;
 	buf[i++] = 0;
 	buf[0] = (unsigned char) i;
 	dprintk(1, "%s\n", __func__);
-	buf[i++] = compute_checksum(buf,buf[0]);
+	buf[i++] = compute_checksum(buf, buf[0]);
 	rc = s2226_send_msg(dev, S2226_BULKMSG_TO);
 	s2226_mutex_unlock(&dev->cmdlock);
 	return rc;
@@ -967,87 +974,75 @@ static int send_h51_boot(struct s2226_dev *dev)
 
 static int send_fpga_boot(struct s2226_dev *dev)
 {
-	int i=0;
+	int i = 0;
 	unsigned char *buf = dev->control_buffer;
 	int rc;
 	unsigned char id;
 	s2226_mutex_lock(&dev->cmdlock);
 	id = dev->id++;
 	fill_cmd_buf(buf, i, HOSTCMD_BOOT, id);
-	buf[i++] = 0x00; //addr MSB
-	buf[i++] = 0x01; //addr
-	buf[i++] = 0x00; //addr
-	buf[i++] = 0x00; //addr LSB
-	buf[i++] = 0x00; //size MSB
-	buf[i++] = 0x07; //size
-	buf[i++] = 0xcb; //size
-	buf[i++] = 0x88; //size LSB
+	buf[i++] = 0x00; /*addr MSB*/
+	buf[i++] = 0x01; /*addr*/
+	buf[i++] = 0x00; /*addr*/
+	buf[i++] = 0x00; /*addr LSB*/
+	buf[i++] = 0x00; /*size MSB*/
+	buf[i++] = 0x07; /*size*/
+	buf[i++] = 0xcb; /*size*/
+	buf[i++] = 0x88; /*size LSB*/
 	buf[i++] = DEVID_FPGA;
 	buf[i++] = 0;
 	buf[0] = (unsigned char) i;
 	dprintk(4, "%s\n", __func__);
-	buf[i++] = compute_checksum(buf,buf[0]);
+	buf[i++] = compute_checksum(buf, buf[0]);
 	rc = s2226_send_msg(dev, S2226_BULKMSG_TO);
 	s2226_mutex_unlock(&dev->cmdlock);
 	return rc;
 }
 
-//static int send_aic33_rd(struct s2226_dev *dev, unsigned char addr, unsigned char *val);
 static int s2226_aic33_check(u8 page, u8 reg, u8 val);
-static int send_aic33_wr(struct s2226_dev *dev, unsigned char addr, unsigned char val)
+static int send_aic33_wr(struct s2226_dev *dev, unsigned char addr,
+			 unsigned char val)
 {
-	int i=0;
+	int i = 0;
 	unsigned char *buf = dev->control_buffer;
 	int rc;
 	unsigned char id;
-//	unsigned char rval;
-	if (addr == 0) {
+	if (addr == 0)
 		dev->audio_page = val & 1;
-	}
-	// currently for debug.
+	/* currently for debug. */
 	rc = s2226_aic33_check(dev->audio_page, addr, val);
-	if (rc != 0) {
-		printk("%s: possible invalid AIC33 write\n", __func__);
-	}
+
+	if (rc != 0)
+		printk(KERN_WARNING "%s: invalid AIC33\n", __func__);
 
 	s2226_mutex_lock(&dev->cmdlock);
 	id = dev->id++;
 	fill_cmd_buf(buf, i, HOSTCMD_REGWRITE, id);
 	buf[i++] = DEVID_AUDIO;
-	buf[i++] = 1; //mode (no address increment, 8 bit values)
-	buf[i++] = 0; // values (MSB)
-	buf[i++] = 1; // 1 8 bit data field present
-	buf[i++] = 0; // MSB of addr(32 bits in command)
+	buf[i++] = 1; /* mode (no address increment, 8 bit values) */
+	buf[i++] = 0; /* values (MSB) */
+	buf[i++] = 1; /* 1 8 bit data field present */
+	buf[i++] = 0; /* MSB of addr(32 bits in command) */
 	buf[i++] = 0;
 	buf[i++] = 0;
 	buf[i++] = addr;
 	buf[i++] = val;
 	buf[0] = (unsigned char) i;
 	dprintk(2, "%s: 0x%02x:0x%02x\n", __func__, addr, val);
-	buf[i++] = compute_checksum(buf,buf[0]);
+	buf[i++] = compute_checksum(buf, buf[0]);
 	rc = s2226_send_msg(dev, S2226_BULKMSG_TO);
 	if (rc != 0)
 		printk(KERN_INFO "failed to send message %d\n", rc);
 	s2226_mutex_unlock(&dev->cmdlock);
-#if 0
-	// DEBUG
-	// read back value
-	(void) send_aic33_rd(dev, addr, &rval);
-	if (rval != val) {
-		// not an error because some bits are read-only for 
-		// certain registers
-		dprintk(2, "%s: mismatch.  Addr %d, value 0x%02x, rval 0x%02x\n",
-			__func__, addr, val, rval);
-	}
-#endif
 	return rc;
 }
 
 
 
-static int send_saa7115_wr(struct s2226_dev *dev, unsigned char addr, unsigned char val)
+static int send_saa7115_wr(struct s2226_dev *dev, unsigned char addr,
+			   unsigned char val)
 {
-	int i=0;
+	int i = 0;
 	unsigned char *buf = dev->control_buffer;
 	int rc;
 	unsigned char id;
@@ -1055,17 +1050,17 @@ static int send_saa7115_wr(struct s2226_dev *dev, unsigned char addr, unsigned c
 	id = dev->id++;
 	fill_cmd_buf(buf, i, HOSTCMD_REGWRITE, id);
 	buf[i++] = DEVID_VIDDEC;
-	buf[i++] = 1; //mode (no address increment, 8 bit values)
-	buf[i++] = 0; // values (MSB)
-	buf[i++] = 1; // 1 8 bit data field present
-	buf[i++] = 0; // MSB of addr(32 bits in command)
+	buf[i++] = 1; /* mode (no address increment, 8 bit values) */
+	buf[i++] = 0; /* values (MSB) */
+	buf[i++] = 1; /* 1 8 bit data field present */
+	buf[i++] = 0; /* MSB of addr(32 bits in command) */
 	buf[i++] = 0;
 	buf[i++] = 0;
 	buf[i++] = addr;
 	buf[i++] = val;
 	buf[0] = (unsigned char) i;
 	dprintk(2, "%s: %x:%x\n", __func__, addr, val);
-	buf[i++] = compute_checksum(buf,buf[0]);
+	buf[i++] = compute_checksum(buf, buf[0]);
 	rc = s2226_send_msg(dev, S2226_BULKMSG_TO);
 	s2226_mutex_unlock(&dev->cmdlock);
 	return rc;
@@ -1104,13 +1099,12 @@ static int s2226_set_hue(struct s2226_dev *dev, char val)
 	return rc;
 }
 
-
-
 #define STREAM_MODE_IDLE				0x00
 #define STREAM_MODE_ENCODE				0x10
 #define STREAM_MODE_DECODE				0x20
 
-static int send_h51_setmode(struct s2226_dev *dev, unsigned char streamID, unsigned char mode)
+static int send_h51_setmode(struct s2226_dev *dev,
+			    unsigned char streamID, unsigned char mode)
 {
 	int i = 0;
 	unsigned char id;
@@ -1128,9 +1122,10 @@ static int send_h51_setmode(struct s2226_dev *dev, unsigned char streamID, unsig
 	return rc;
 }
 
-static int send_flash_read(struct s2226_dev *dev, unsigned int raddr, int rlen, unsigned char *data, int *len)
+static int send_flash_read(struct s2226_dev *dev, unsigned int raddr,
+			   int rlen, unsigned char *data, int *len)
 {
-	int i=0;
+	int i = 0;
 	unsigned char id;
 	int rc;
 	int reqlen = rlen;
@@ -1149,7 +1144,7 @@ static int send_flash_read(struct s2226_dev *dev, unsigned int raddr, int rlen, 
 			s2226_mutex_unlock(&dev->cmdlock);
 			return -EINVAL;
 		}
-		// use length = 0 for 508 bytes
+		/* use length = 0 for 508 bytes */
 		rlen = 0;
 	}
 	buf[i++] = rlen;
@@ -1168,9 +1163,10 @@ static int send_flash_read(struct s2226_dev *dev, unsigned int raddr, int rlen, 
 	return 0;
 }
 
-static int send_flash_write(struct s2226_dev *dev, unsigned int addr, unsigned char *data, int len)
+static int send_flash_write(struct s2226_dev *dev, unsigned int addr,
+			    unsigned char *data, int len)
 {
-	int i=0;
+	int i = 0;
 	int j;
 	int siz;
 	unsigned char id;
@@ -1190,8 +1186,8 @@ static int send_flash_write(struct s2226_dev *dev, unsigned int addr, unsigned c
 			return -EINVAL;
 		}
 		buf[0] = (unsigned char) i & 0xff;
-		// use reserved field for upper 8 bits 
-		// support on ARM FW 0x44 and above
+		/* use reserved field for upper 8 bits
+		   support on ARM FW 0x44 and above */
 		buf[3] = (unsigned char) (i >> 8) & 0xff;
 	}
 	siz = i;
@@ -1201,7 +1197,8 @@ static int send_flash_write(struct s2226_dev *dev, unsigned int addr, unsigned c
 	return rc;
 }
 
-static int send_flash_erase(struct s2226_dev *dev, unsigned int fw_addr, unsigned int fw_len)
+static int send_flash_erase(struct s2226_dev *dev,
+			    unsigned int fw_addr, unsigned int fw_len)
 {
 	int i = 0;
 	unsigned char id;
@@ -1232,7 +1229,7 @@ static int send_persona_run(struct s2226_dev *dev, unsigned char persona_id)
 	buf[i++] = persona_id;
 	buf[i++] = 0;
 	buf[0] = (unsigned char) i;
-	buf[i++] = compute_checksum(buf,buf[0]);
+	buf[i++] = compute_checksum(buf, buf[0]);
 	rc = s2226_send_msg(dev, S2226_BULKMSG_TO);
 	s2226_mutex_unlock(&dev->cmdlock);
 	return rc;
@@ -1271,7 +1268,8 @@ static int s2226_start_rb_urbs(struct s2226_dev *dev, int context)
 	dev->read_vid_head = 0;
 	for (i = 0; i < RD_URBS; i++) {
 		usb_fill_bulk_urb(dev->read_vid[i].urb, dev->udev,
-				  usb_rcvbulkpipe(dev->udev, dev->ep[INDEX_EP_H264]),
+				  usb_rcvbulkpipe(dev->udev,
+						  dev->ep[INDEX_EP_H264]),
 				  (void *) dev->read_vid[i].buffer,
 				  S2226_RB_PKT_SIZE,
 				  s2226_read_vid_callback,
@@ -1286,27 +1284,25 @@ static int s2226_start_rb_urbs(struct s2226_dev *dev, int context)
 	}
 	return 0;
 }
-				   
+
 static int s2226_start_encode(struct s2226_dev *dev, int idx, int context)
 {
 	int i, bank;
 	int rc;
 	struct usb_host_interface *iface_desc;
 	struct usb_endpoint_descriptor *endpoint;
-	if (!dev->udev) return -ENODEV;
+	if (!dev->udev)
+		return -ENODEV;
+	dprintk(1, "cur_input=%d\n", dev->cur_input);
+	dprintk(1, "vFormat=%d\n", dev->h51_mode.vFormat);
+	dprintk(1, "frRed=%d\n", dev->h51_mode.frRed);
+	dprintk(1, "vBitrate=%d\n", dev->h51_mode.vBitrate);
+	dprintk(1, "aBitrate=%d\n", dev->h51_mode.aBitrate);
+	dprintk(1, "aMode=%d\n", dev->h51_mode.aMode);
 
-	dprintk(1,"cur_input=%d\n", dev->cur_input);
-	dprintk(1,"vFormat=%d\n", dev->h51_mode.vFormat);
-	dprintk(1,"frRed=%d\n", dev->h51_mode.frRed);
-	dprintk(1,"vBitrate=%d\n", dev->h51_mode.vBitrate);
-	dprintk(1,"aBitrate=%d\n", dev->h51_mode.aBitrate);
-	dprintk(1,"aMode=%d\n", dev->h51_mode.aMode);
 
-
-	// 1) Change to alternate configuration
+	/* 1) Change to alternate configuration */
 	iface_desc = dev->interface->cur_altsetting;
-	// temporarily commented out
-	//if (iface_desc->desc.bAlternateSetting != 1)
 	s2226_set_interface(dev, 0, 1);
 	if (dev->h51_reload_required) {
 		send_h51_boot(dev);
@@ -1315,40 +1311,66 @@ static int s2226_start_encode(struct s2226_dev *dev, int idx, int context)
 	iface_desc = dev->interface->cur_altsetting;
 	for (i = 0; i < iface_desc->desc.bNumEndpoints; ++i) {
 		endpoint = &iface_desc->endpoint[i].desc;
-		dprintk(1,"endpoint %d is %s %s\n", endpoint->bEndpointAddress & 7,
-			((endpoint->bmAttributes & USB_ENDPOINT_XFERTYPE_MASK) == USB_ENDPOINT_XFER_BULK) ? "bulk" : "other",
-			((endpoint->bEndpointAddress & USB_ENDPOINT_DIR_MASK) == USB_DIR_IN) ? "in" : "out");
+		dprintk(1, "endpoint %d is %s %s\n",
+			endpoint->bEndpointAddress & 7,
+			((endpoint->bmAttributes & USB_ENDPOINT_XFERTYPE_MASK)
+			 == USB_ENDPOINT_XFER_BULK) ? "bulk" : "other",
+			((endpoint->bEndpointAddress & USB_ENDPOINT_DIR_MASK)
+			 == USB_DIR_IN) ? "in" : "out");
 	}
 
 	setH51regs(&dev->h51_mode);
 	for (bank = 0; bank < 4; bank++) {
 		int numregs = 0;
 		switch (bank) {
-		case 0: numregs = h51APRMregs; break;
-		case 1: numregs = h51IPRMregs; break;
-		case 2: numregs = h51IPRVregs; break;
-		case 3: numregs = h51IPRAregs; break;
+		case 0:
+			numregs = h51APRMregs;
+			break;
+		case 1:
+			numregs = h51IPRMregs;
+			break;
+		case 2:
+			numregs = h51IPRVregs;
+			break;
+		case 3:
+			numregs = h51IPRAregs;
+			break;
 		}
 		for (i = 0; i < numregs; i++) {
 			unsigned int address = 0, value = 0;
-			switch(bank) {
-			case 0: address = h51APRM[i][0]; value = h51APRM[i][1]; break;
-			case 1: address = h51IPRM[i][0]; value = h51IPRM[i][1]; break;
-			case 2: address = h51IPRV[i][0]; value = h51IPRV[i][1]; break;
-			case 3: address = h51IPRA[i][0]; value = h51IPRA[i][1]; break;
+			switch (bank) {
+			case 0:
+				address = h51APRM[i][0];
+				value = h51APRM[i][1];
+				break;
+			case 1:
+				address = h51IPRM[i][0];
+				value = h51IPRM[i][1];
+				break;
+			case 2:
+				address = h51IPRV[i][0];
+				value = h51IPRV[i][1];
+				break;
+			case 3:
+				address = h51IPRA[i][0];
+				value = h51IPRA[i][1];
+				break;
 			}
-			dprintk(3, "h51 register setting: %08x: %04x\n", address, value);
+			dprintk(3, "h51 register setting: %08x: %04x\n",
+				address, value);
 			if (address == H51REG_GOP_CLK) {
 				if (dev->closed_gop) {
-					printk("closed gop\n");
+					printk(KERN_INFO "s2226: closed gop\n");
 					value |= 0x0400;
 				} else {
+					printk(KERN_INFO "s2226: open gop\n");
 					value &= ~0x0400;
 				}
 			}
 			if (address == H51REG_GOP_STRM) {
 				if (dev->gop_struct != -1) {
-					printk(KERN_INFO "GOP struct override %d\n", dev->gop_struct);
+					printk(KERN_INFO "GOP struct override %d\n",
+					       dev->gop_struct);
 					value &= 0x00ff;
 					value |= ((dev->gop_struct & 0xff) << 8);
 					if (dev->gop_struct == 2 || (dev->gop_struct > 3))
@@ -1357,7 +1379,8 @@ static int s2226_start_encode(struct s2226_dev *dev, int idx, int context)
 			}
 			if (address == H51REG_AIN_OFFSET) {
 				if (dev->ainoffset != -1) {
-					printk(KERN_INFO "AIN_OFFSET override 0x%x\n", dev->ainoffset);
+					printk(KERN_INFO "AIN_OFFSET override 0x%x\n",
+					       dev->ainoffset);
 
 					if (dev->ainoffset > AINOFFSET_MAX) {
 						dev->ainoffset = AINOFFSET_MAX;
@@ -1367,31 +1390,40 @@ static int s2226_start_encode(struct s2226_dev *dev, int idx, int context)
 				}
 			}
 			rc = send_h51_regwr(dev, address, value);
-			if (rc < 0) { dprintk(1, "%s regwr %d\n", __func__, rc); return rc; }
+			if (rc < 0) {
+				dprintk(1,  "%s regwr %d\n", __func__, rc);
+				return rc;
+			}
 		}
 	}
-	// 3) Send Halt to config persona:
+	/* 3) Send Halt to config persona: */
 	rc = send_persona_halt(dev);
-	if (rc < 0) { dprintk(1, "%s persona_halt %d\n", __func__, rc); return rc; }
+	if (rc < 0) {
+		dprintk(1,  "%s persona_halt %d\n", __func__, rc);
+		return rc;
+	}
 	dev->persona = PERSONA_DEFAULT;
 
-	// 4) Set encode persona:
+	/* 4) Set encode persona: */
 	printk("done persona encode\n");
 	rc = send_persona_run(dev, 1);
-	if (rc < 0) { dprintk(1, "%s persona_run %d\n", __func__, rc); return rc; }
-
+	if (rc < 0) {
+		dprintk(1,  "%s persona_run %d\n", __func__, rc);
+		return rc;
+	}
 	dev->persona = PERSONA_ENCODE;
 	s2226_flush_in_ep(dev);
 
-	// start the read pipe
+	/* start the read pipe */
 	s2226_start_rb_urbs(dev, context);
 
-	// 5)  Start encode
+	/* 5)  Start encode */
 	rc = send_h51_setmode(dev, 0, STREAM_MODE_ENCODE);
-	if (rc < 0) { dprintk(1, "%s persona_halt %d\n", __func__, rc); return rc; }
-
+	if (rc < 0) {
+		dprintk(1,  "%s persona_halt %d\n", __func__, rc);
+		return rc;
+	}
 	dev->h51_state = STREAM_MODE_ENCODE;
-
 	return 0;
 }
 
@@ -1399,7 +1431,6 @@ int s2226_stop_encode(struct s2226_dev *dev, int idx)
 {
 	int rc;
 	int streaid = 0;
-
 	rc = send_h51_setmode(dev, streaid, STREAM_MODE_IDLE);
 	if (rc < 0)
 		return rc;
@@ -1407,11 +1438,10 @@ int s2226_stop_encode(struct s2226_dev *dev, int idx)
 	rc = send_persona_halt(dev);
 	if (rc < 0)
 		return rc;
-
 	dev->persona = PERSONA_DEFAULT;
 	dev->h51_state = STREAM_MODE_IDLE;
 	return 0;
-}	
+}
 
 int s2226_start_decode(struct s2226_dev *dev, int idx)
 {
@@ -1420,18 +1450,16 @@ int s2226_start_decode(struct s2226_dev *dev, int idx)
 	int numregs;
 	struct usb_host_interface *iface_desc;
 	struct usb_endpoint_descriptor *endpoint;
-	if (!dev->udev) return -ENODEV;
+	if (!dev->udev)
+		return -ENODEV;
 
-	dprintk(1,"vFormat=%d\n", dev->h51_mode.vFormat);
-	dprintk(1,"vBitrate=%d\n", dev->h51_mode.vBitrate);
-	dprintk(1,"aBitrate=%d\n", dev->h51_mode.aBitrate);
-	dprintk(1,"aMode=%d\n", dev->h51_mode.aMode);
+	dprintk(1, "vFormat=%d\n", dev->h51_mode.vFormat);
+	dprintk(1, "vBitrate=%d\n", dev->h51_mode.vBitrate);
+	dprintk(1, "aBitrate=%d\n", dev->h51_mode.aBitrate);
+	dprintk(1, "aMode=%d\n", dev->h51_mode.aMode);
 
-    
-	// 1) Change to alternate configuration
+	/* 1) Change to alternate configuration */
 	iface_desc = dev->interface->cur_altsetting;
-	// temporarily commented out
-	//if (iface_desc->desc.bAlternateSetting != 0)
 	s2226_set_interface(dev, 0, 0);
 	iface_desc = dev->interface->cur_altsetting;
 	if (dev->h51_reload_required) {
@@ -1440,21 +1468,21 @@ int s2226_start_decode(struct s2226_dev *dev, int idx)
 	}
 	for (i = 0; i < iface_desc->desc.bNumEndpoints; ++i) {
 		endpoint = &iface_desc->endpoint[i].desc;
-		dprintk(1,"endpoint %d is %s %s\n", endpoint->bEndpointAddress & 7,
+		dprintk(1, "endpoint %d is %s %s\n", endpoint->bEndpointAddress & 7,
 			((endpoint->bmAttributes & USB_ENDPOINT_XFERTYPE_MASK) == USB_ENDPOINT_XFER_BULK) ? "bulk" : "other",
 			((endpoint->bEndpointAddress & USB_ENDPOINT_DIR_MASK) == USB_DIR_IN) ? "in" : "out");
 	}
 
 	numregs = sizeof(G_h51reg_dec) / (2*sizeof(u32));
-	// 2) send h51 registers
-	// update decode registers based on format
+	/* 2) send h51 registers */
+	/* update decode registers based on format */
 	for (i = 0; i < numregs; i++) {
 		int address, value;
 		address = G_h51reg_dec[i][0];
 		value = G_h51reg_dec[i][1];
 		switch (address) {
 		case H51REG_V_V420_FILTER_00:
-			// default is interlaced
+			/* default is interlaced */
 			value = (IS_PROG_INPUT(dev->cur_input)) ? 0x07 : value;
 			break;
 		case H51REG_V_V420_FILTER_02:
@@ -1525,32 +1553,31 @@ int s2226_start_decode(struct s2226_dev *dev, int idx)
 				break;
 			}
 		}
-		
+
 		if ((address == H51REG_V_IP_DETECT) && IS_PROG_INPUT(dev->cur_input)) {
 			value = 0x0001;
 			if (*s2226_filter_mode == 1) {
-				printk("s2226: turning off V_IP_DETECT\n");
+				printk(KERN_INFO "s2226: turning off V_IP_DETECT\n");
 				value = 0x0000;
 			}
 		}
 
 		if (address == H51REG_DPB_SIZE && dev->dpb_size > -1) {
 			value = dev->dpb_size;
-			printk("using dpb size %d\n", value);
+			printk(KERN_INFO "using dpb size %d\n", value);
 		}
 
-		// frRed is set after the set_input
-		// 74.1758 not defined in the ARM, so we piggy back
-		// on the non frRed inputs and set frRed value.
-		// only need to change V_VINPELCLK H51 register
+		/* frRed is set after the set_input
+		   74.1758 not defined in the ARM, so we piggy back
+		   on the non frRed inputs and set frRed value.
+		   only need to change V_VINPELCLK H51 register */
 		if (address == H51REG_GOP_CLK) {
 			if (dev->h51_mode.frRed == 0)
-				value |= 0x0001; // 74.25 (no reduction)
+				value |= 0x0001; /* 74.25 (no reduction) */
 			else
 				value &= ~0x0001;
 		}
 
-		
 		if ((address == H51REG_AV_RESYNC) && (dev->avresync != -1)) {
 			if (dev->avresync && (dev->avresync < AVRESYNC_MIN))
 				dev->avresync = AVRESYNC_MIN;
@@ -1561,24 +1588,32 @@ int s2226_start_decode(struct s2226_dev *dev, int idx)
 		}
 		dprintk(3, "h51 register setting: %08x: %04x\n", address, value);
 		rc = send_h51_regwr(dev, address, value);
-		if (rc < 0) { dprintk(1, "%s regwr %d\n", __func__, rc); return rc; }
+		if (rc < 0) {
+			dprintk(1, "%s regwr %d\n", __func__, rc);
+			return rc;
+		}
 	}
-	// 3) Send Halt to config persona:
-    
+	/* 3) Send Halt to config persona: */
 	rc = send_persona_halt(dev);
-	if (rc < 0) { dprintk(0, "%s persona_halt %d\n", __func__, rc); return rc; }
+	if (rc < 0) {
+		dprintk(0, "%s persona_halt %d\n", __func__, rc);
+		return rc;
+	}
 	dev->persona = PERSONA_DEFAULT;
-	// 4) Set decode persona:
-	printk("done persona\n");
+	/* 4) Set decode persona: */
+	printk(KERN_INFO "done persona\n");
 	rc = send_persona_run(dev, PERSONA_DECODE);
-	if (rc < 0) { dprintk(1, "%s persona_run %d\n", __func__, rc); return rc; }
-
+	if (rc < 0) {
+		dprintk(1, "%s persona_run %d\n", __func__, rc);
+		return rc;
+	}
 	dev->persona = PERSONA_DECODE;
-
-	// 5)  Start decode
+	/* 5)  Start decode */
 	rc = send_h51_setmode(dev, 0, STREAM_MODE_DECODE);
-	if (rc < 0) { dprintk(1, "%s persona_halt %d\n", __func__, rc); return rc; }
-
+	if (rc < 0) {
+		dprintk(1, "%s persona_halt %d\n", __func__, rc);
+		return rc;
+	}
 	dev->h51_state = STREAM_MODE_DECODE;
 	return 0;
 }
@@ -1592,7 +1627,6 @@ int s2226_stop_decode(struct s2226_dev *dev, int idx)
 	rc = send_persona_halt(dev);
 	if (rc < 0)
 		return rc;
-
 	dev->persona = PERSONA_DEFAULT;
 	dev->h51_state = STREAM_MODE_IDLE;
 	return 0;
@@ -1600,7 +1634,7 @@ int s2226_stop_decode(struct s2226_dev *dev, int idx)
 
 int s2226_set_attr(struct s2226_dev *dev, int attr, int value);
 
-int s2226_is_decode_input(int value) 
+int s2226_is_decode_input(int value)
 {
 	switch (value) {
 	case INPUT_H51_SD_480I:
@@ -1638,7 +1672,7 @@ int s2226_set_attr(struct s2226_dev *dev, int attr, int value)
 	fill_cmd_buf_val32(buf, i, attr);
 	fill_cmd_buf_val32(buf, i, value);
 	buf[0] = i;
-	buf[i++] = compute_checksum(buf,buf[0]);
+	buf[i++] = compute_checksum(buf, buf[0]);
 
 	if (attr == ATTR_INPUT) {
 		timeout = S2226_SETINPUT_TO;
@@ -1648,7 +1682,7 @@ int s2226_set_attr(struct s2226_dev *dev, int attr, int value)
 	rc = s2226_send_msg(dev, timeout);
 
 	if (rc < 0) {
-		printk("%s fail %d\n", __func__, rc);
+		printk(KERN_INFO "%s fail %d\n", __func__, rc);
 		s2226_mutex_unlock(&dev->cmdlock);
 		return rc;
 	}
@@ -1677,22 +1711,22 @@ static int s2226_get_attr_ext(struct s2226_dev *dev, int attr, int *value, int *
 	fill_cmd_buf(buf, i, HOSTCMD_ATTR_READ, id);
 	fill_cmd_buf_val32(buf, i, attr);
 	buf[0] = i;
-	buf[i++] = compute_checksum(buf,buf[0]);
+	buf[i++] = compute_checksum(buf, buf[0]);
 	rc = s2226_send_msg(dev, S2226_BULKMSG_TO);
 	if (rc < 0) {
-		printk("%s fail %d\n", __func__, rc);
+		printk(KERN_INFO "%s fail %d\n", __func__, rc);
 		s2226_mutex_unlock(&dev->cmdlock);
 		return rc;
 	}
 	buf = (unsigned char *) dev->interrupt_buffer;
 	if (buf[3] != 0) {
-		printk("%s: invalid returned value %d\n", __func__, buf[3]);
+		printk(KERN_INFO "%s: invalid returned value %d\n", __func__, buf[3]);
 		s2226_mutex_unlock(&dev->cmdlock);
 		return buf[3];
 	}
 	if ((attr == ATTR_LAST_ERR) || (attr == ATTR_LAST_MESSAGE)) {
-		dprintk(0, "%s dump: %x %x %x %x\n %x %x %x %x\n %x %x %x %x \n",
-			(attr==ATTR_LAST_ERR) ? "last err" : "last msg",
+		dprintk(0, "%s dump: %x %x %x %x\n %x %x %x %x\n %x %x %x %x\n",
+			(attr == ATTR_LAST_ERR) ? "last err" : "last msg",
 			buf[3], buf[4],
 			buf[5], buf[6],
 			buf[7], buf[8],
@@ -1717,11 +1751,11 @@ static int s2226_send_nop(struct s2226_dev *dev, int bResp)
 		rc = s2226_send_msg(dev, S2226_BULKMSG_TO);
 	else {
 		(void) write_control_endpoint(dev, S2226_PRIMEFX2_TO);
-		// read interrupt endpoint with short timeout
-		// in case FX2 is just priming itself
-		// but long enough in case of POR when there is
-		// a delay before the firmware in the ARM loads
-		// 3s should be plenty
+		/* read interrupt endpoint with short timeout
+		   in case FX2 is just priming itself
+		   but long enough in case of POR when there is
+		   a delay before the firmware in the ARM loads
+		   3s should be plenty */
 		(void) usb_bulk_msg(dev->udev, usb_rcvbulkpipe(dev->udev, dev->ep[INDEX_EP_RESP]),
 				    dev->interrupt_buffer,
 				    512,
@@ -1754,12 +1788,11 @@ static int s2226_prime_fx2(struct s2226_dev *dev)
 		(void) s2226_vendor_request(dev, 0x16, 0, 0, &rc, 2, 0);
 	}
 
-	// write some nops to prime the control out buffer
-	for (i = 0; i < 2; i++) {
-		(void) s2226_send_nop(dev, 0); // NOP without response
-	}
+	/* write some nops to prime the control out buffer */
+	for (i = 0; i < 2; i++)
+		(void) s2226_send_nop(dev, 0); /* NOP without response */
 	iface_desc = dev->interface->cur_altsetting;
-	// flush all the in endpoints
+	/* flush all the in endpoints */
 	for (i = 0; i < iface_desc->desc.bNumEndpoints; ++i) {
 		endpoint = &iface_desc->endpoint[i].desc;
 		epnum = endpoint->bEndpointAddress & 7;
@@ -1767,7 +1800,7 @@ static int s2226_prime_fx2(struct s2226_dev *dev)
 		     == USB_DIR_IN) &&
 		    ((endpoint->bmAttributes & USB_ENDPOINT_XFERTYPE_MASK)
 		     == USB_ENDPOINT_XFER_BULK)) {
-			// flush any data in FX2, just in case
+			/* flush any data in FX2, just in case */
 			int j = 0;
 			do {
 				rc = usb_bulk_msg(dev->udev,
@@ -1790,29 +1823,27 @@ static int s2226_prime_fx2(struct s2226_dev *dev)
 static int s2226_set_interface(struct s2226_dev *dev, int cfg, int alt)
 {
 	int rc;
-	// ARM should be halted before changing the interface.
-	// Also, it should not be streaming or decoding
-	if (dev->h51_state == STREAM_MODE_ENCODE) {
+	/* ARM should be halted before changing the interface.
+	   Also, it should not be streaming or decoding */
+	if (dev->h51_state == STREAM_MODE_ENCODE)
 		s2226_stop_encode(dev, 0);
-	}
-	if (dev->h51_state == STREAM_MODE_DECODE) {
+	if (dev->h51_state == STREAM_MODE_DECODE)
 		s2226_stop_decode(dev, 0);
-	}
-	// always send halt
+	/* always send halt */
 	(void) send_persona_halt(dev);
-	// TODO: this might be fixed in newer firmwares
-	// need to send again or first encode after power up
-	// may not work
+	/* TODO: this might be fixed in newer firmwares
+	   need to send again or first encode after power up
+	   may not work */
 	(void) send_persona_halt(dev);
- 	// set the interface
- 	rc = usb_set_interface(dev->udev, cfg, alt);
- 	s2226_prime_fx2(dev);
+	/* set the interface */
+	rc = usb_set_interface(dev->udev, cfg, alt);
+	s2226_prime_fx2(dev);
 	return rc;
 }
 
 static int s2226_new_input(struct s2226_dev *dev, int input)
 {
-	int vFormat = 0; 
+	int vFormat = 0;
 	int frRed = 0;
 	int is_decode = 0;
 	switch (input) {
@@ -1822,7 +1853,7 @@ static int s2226_new_input(struct s2226_dev *dev, int input)
 	case INPUT_SVIDEO1_480I:
 	case INPUT_H51_SD_480I:
 		vFormat = VFMT_480_60i;
-		frRed = 1; // for SD, this field is a don't care
+		frRed = 1; /* for SD, this field is a don't care */
 		break;
 	case INPUT_COMP0_576I:
 	case INPUT_COMP1_576I:
@@ -1830,17 +1861,17 @@ static int s2226_new_input(struct s2226_dev *dev, int input)
 	case INPUT_SVIDEO1_576I:
 	case INPUT_H51_SD_576I:
 		vFormat = VFMT_576_50i;
-		frRed = 0; // for SD, this field is a don't care
+		frRed = 0; /* for SD, this field is a don't care */
 		break;
 	case INPUT_SDI_480I:
 	case INPUT_SDI_480I_CB:
 		vFormat = VFMT_480_60i;
-		frRed = 1; // for SD, this field is a don't care
+		frRed = 1; /* for SD, this field is a don't care */
 		break;
 	case INPUT_SDI_576I:
 	case INPUT_SDI_576I_CB:
 		vFormat = VFMT_576_50i;
-		frRed = 0; // for SD, this field is a don't care
+		frRed = 0; /* for SD, this field is a don't care */
 		break;
 	case INPUT_SDI_1080I_50:
 	case INPUT_SDI_1080I_50_CB:
@@ -1879,11 +1910,11 @@ static int s2226_new_input(struct s2226_dev *dev, int input)
 	case INPUT_SDI_720P_60_CB:
 	case INPUT_SDI_720P_5994_CB:
 	case INPUT_H51_HD_720P_60:
-	case INPUT_H51_HD_720P_5994: 
+	case INPUT_H51_HD_720P_5994:
 		vFormat = VFMT_720_60p;
 		if (dev->fpga_ver <= 0x18 && dev->fpga_ver != -1) {
-			// 59.94 uses 60hz colorbar reference
-			// for decode
+			/* 59.94 uses 60hz colorbar reference */
+			/* for decode */
 			if (input == INPUT_SDI_720P_5994_CB) {
 				printk(KERN_INFO "upgrade your FPGA firmware, current %x\n",
 				       dev->fpga_ver);
@@ -1963,7 +1994,7 @@ static int s2226_new_input(struct s2226_dev *dev, int input)
 	dev->h51_mode.frRed = frRed;
 	dev->input_set = 1;
 	/*
-	 * new input will clear the audio settings. 
+	 * new input will clear the audio settings.
 	 * reconfigure if necessary
 	 */
 	if (audiomode == S2226_AUDIOMODE_AUTO_2420 ||
@@ -1972,18 +2003,6 @@ static int s2226_new_input(struct s2226_dev *dev, int input)
 		SetAudioRoute(dev, dev->aud.iRoute);
 		SetAudioOut(dev);
 	}
-#if 0
-	if (audiomode == S2226_AUDIOMODE_AUTO_2226S) {
-		(void) send_aic33_wr(dev, 37, 0xe0); // HPLCOM single-ended
-		(void) send_aic33_wr(dev, 38, 0x14); // HPRCOM single-ended, SC
-		(void) send_aic33_wr(dev, 40, 0x40); // 1.5V output voltage
-		(void) send_aic33_wr(dev, 41, 0x00);    // DAC_L1 path, (Unlike the 2420,
-		//we still need stereo and mono outputs and can't use DAC_L2)
-		(void) send_aic33_wr(dev, 47, 0x80); // DAC_L1 to HPLOUT
-		(void) send_aic33_wr(dev, 64, 0x80); // DAC_R1 to HPROUT
-	}
-#endif
-
 	return 0;
 }
 
@@ -1994,21 +2013,21 @@ int s2226_set_audiomux_mpegin(struct s2226_dev *dev, int aud)
 	int reg;
 	int rc;
 	rc = get_reg(dev, DEVID_FPGA, S2226_REG_AUD_INPK_CTL, &reg);
-	if (rc != 0) {
+	if (rc != 0)
 		printk(KERN_WARNING "s2226 setaudio mux fail\n");
-	}
+
 	switch (aud) {
 	case S2226_AUDIOINPUT_LINE:
-		reg = reg & 0x010c;// Keep bit 8(GENCK),3, 2
-		reg = reg | 0x0000;// line in to MPEG in
+		reg = reg & 0x010c;/* Keep bit 8(GENCK),3, 2 */
+		reg = reg | 0x0000;/* line in to MPEG in */
 		break;
 	case S2226_AUDIOINPUT_TONE:
-		reg = reg & 0x010C; 
-		reg = reg | 0x00C2; // Tone test data to MPEG in
+		reg = reg & 0x010C;
+		reg = reg | 0x00C2; /* Tone test data to MPEG in */
 		break;
 	case S2226_AUDIOINPUT_SDI:
-		reg = reg & 0x010C; 
-		reg = reg | 0x0042; // SDIiAud data to MPEG in
+		reg = reg & 0x010C;
+		reg = reg | 0x0042; /* SDIiAud data to MPEG in */
 		break;
 	default:
 		printk(KERN_INFO "s2226 setaudio mux, invalid input %d\n", aud);
@@ -2021,10 +2040,10 @@ int s2226_set_audiomux_mpegin(struct s2226_dev *dev, int aud)
 
 
 int s2226_ioctl(struct inode *inode, struct file *file,
-                unsigned int cmd, unsigned long arg);
+		unsigned int cmd, unsigned long arg);
 
-static long s2226_ioctl_compat( struct file *file,
-				unsigned int cmd, unsigned long arg)
+static long s2226_ioctl_compat(struct file *file,
+			       unsigned int cmd, unsigned long arg)
 {
 	long rc;
 	dprintk(4, "compat ioctl cmd 0x%x, arg 0x%lx\n", cmd, arg);
@@ -2040,7 +2059,7 @@ long s2226_ioctl_unlocked(struct file *file,
 	struct s2226_dev *dev = (struct s2226_dev *) fh->dev;
 	dprintk(4, "ioctl unlocked\n");
 	if (s2226_mutex_lock_interruptible(&dev->ioctl_lock)) {
-		printk("could not acquire lock s2226_open\n");
+		printk(KERN_INFO "could not acquire lock s2226_open\n");
 		return -EAGAIN;
 	}
 	rc = s2226_ioctl(NULL, file, cmd, arg);
@@ -2050,15 +2069,15 @@ long s2226_ioctl_unlocked(struct file *file,
 int s2226_get_fpga_ver(struct s2226_dev *dev);
 
 int s2226_ioctl(struct inode *inode, struct file *file,
-                unsigned int cmd, unsigned long arg)
+		unsigned int cmd, unsigned long arg)
 {
 	struct s2226_fh  *fh = (struct s2226_fh *) file->private_data;
 	struct s2226_dev *dev = (struct s2226_dev *) fh->dev;
 	void __user *argp = (void __user *)arg;
-	int ret=0;
+	int ret = 0;
 	dprintk(4, "fh %p ioctl %x %lx\n", fh, cmd, arg);
 	if (dev == NULL) {
-		printk("invalid device\n");
+		printk(KERN_INFO "invalid device\n");
 		return -EINVAL;
 	}
 
@@ -2067,28 +2086,26 @@ int s2226_ioctl(struct inode *inode, struct file *file,
 	{
 		int j;
 		for (j = 0; j < WR_URBS; j++)
-			if (!dev->write_vid[j].ready) {
-				return 1; // still decoding
-			}
-                // driver idle,
-		// but H51 decoder could still be running
-		return 0; 
+			if (!dev->write_vid[j].ready)
+				return 1;
+		/* still decoding, driver idle,
+		   but H51 decoder could still be running */
+		return 0;
 	}
 	case S2226_IOC_I2C_TX:
 	{
 		i2c_param_t p;
 		unsigned char addr;
-		if (copy_from_user(&p, (void __user *) arg, sizeof(i2c_param_t))) {
+		if (copy_from_user(&p, (void __user *) arg, sizeof(i2c_param_t)))
 			return -EINVAL;
-		}
-		addr = (p.addr);// >> 1);
+		addr = (p.addr);/* >> 1*/
 		dprintk(1, "I2C_TX addr:[%x], len:%d, data: %x\n", addr, p.len, p.data[2]);
 		ret = s2226_vendor_request(dev,
 					   0x23,
-					   addr, addr,	// val, idx
-					   p.data, //pbuf
-					   p.len,// len
-					   1);	// bIn
+					   addr, addr,	/* val, idx */
+					   p.data, /* pbuf */
+					   p.len,
+					   1);	/* bIn */
 		dprintk(1, "I2C_TX %d\n", ret);
 	}
 	case S2226_IOC_SET_MODE:
@@ -2098,7 +2115,7 @@ int s2226_ioctl(struct inode *inode, struct file *file,
 			printk(KERN_INFO "s2226: set mode, device busy(streaming)\n");
 			return -EBUSY;
 		}
-		dprintk(3,"set mode\n");
+		dprintk(3, "set mode\n");
 		if (copy_from_user(&mode, argp, sizeof(mode_param_t)))
 			return -EINVAL;
 		switch (mode.idx) {
@@ -2190,16 +2207,16 @@ int s2226_ioctl(struct inode *inode, struct file *file,
 			}
 			break;
 		}
-		dprintk(3,"set mode: ret: %d\n",ret);
+		dprintk(3, "set mode: ret: %d\n", ret);
 		break;
 	}
 	case S2226_IOC_GET_MODE:
 	{
 		mode_param_t mode;
-		dprintk(3, "get mode\n");
+		dprintk(3,  "get mode\n");
 		if (copy_from_user(&mode, argp, sizeof(mode_param_t)))
 			return -EINVAL;
-		dprintk(3,"get mode: idx %d\n", mode.idx);
+		dprintk(3, "get mode: idx %d\n", mode.idx);
 		switch (mode.idx) {
 		case S2226_IDX_AMODE:
 			mode.val = dev->h51_mode.aMode;
@@ -2220,11 +2237,10 @@ int s2226_ioctl(struct inode *inode, struct file *file,
 	case S2226_IOC_STARTENCODE:
 	{
 		start_param_t cmd;
-		dprintk(3,"start encode\n");
-		if (copy_from_user( &cmd, argp, sizeof(cmd)))
+		dprintk(3, "start encode\n");
+		if (copy_from_user(&cmd, argp, sizeof(cmd)))
 			return -EINVAL;
-		dprintk(3,"start encode channel %d\n", cmd.idx);
-		//printk("start encode %d\n",cmd.idx);
+		dprintk(3, "start encode channel %d\n", cmd.idx);
 		if (!res_get(dev, fh, RES_STREAM)) {
 			printk(KERN_INFO "s2226: stream busy\n");
 			return -EBUSY;
@@ -2232,25 +2248,24 @@ int s2226_ioctl(struct inode *inode, struct file *file,
 		(void) s2226_set_attr(dev, ATTR_INPUT, dev->cur_input);
 		(void) s2226_set_audiomux_mpegin(dev, dev->cur_audiompeg);
 		ret = s2226_start_encode(dev, cmd.idx, S2226_CONTEXT_USBDEV);
-        if (ret != 0)
-            res_free(dev, fh, RES_STREAM);
+		if (ret != 0)
+			res_free(dev, fh, RES_STREAM);
 		return ret;
 	}
 	case S2226_IOC_STARTDECODE:
 	{
 		start_param_t cmd;
-		dprintk(3,"start decode\n");
-		if (copy_from_user( &cmd, argp, sizeof(cmd)))
+		dprintk(3, "start decode\n");
+		if (copy_from_user(&cmd, argp, sizeof(cmd)))
 			return -EINVAL;
-		dprintk(3,"start decode channel %d\n", cmd.idx);
-		//printk("start encode %d\n",cmd.idx);
+		dprintk(3, "start decode channel %d\n", cmd.idx);
 		if (!res_get(dev, fh, RES_STREAM)) {
 			printk(KERN_INFO "s2226: stream busy\n");
 			return -EBUSY;
 		}
 		ret = s2226_start_decode(dev, cmd.idx);
-        if (ret != 0)
-            res_free(dev, fh, RES_STREAM);
+		if (ret != 0)
+			res_free(dev, fh, RES_STREAM);
 		return ret;
 	}
 	case S2226_IOC_STOPENCODE:
@@ -2258,10 +2273,10 @@ int s2226_ioctl(struct inode *inode, struct file *file,
 		stop_param_t cmd;
 		int i;
 		if ((res_locked(dev, fh) & RES_STREAM) && !(res_check(fh) & RES_STREAM)) {
-			// other handle owns the streaming resource
-			// (If no handle owns resource, allow re-sending
-			//  a stop encode or decode command even if stream
-			//  not running)
+			/* other handle owns the streaming resource
+			   (If no handle owns resource, allow re-sending
+			   a stop encode or decode command even if stream
+			   not running) */
 			return 0;
 		}
 		if (copy_from_user(&cmd, argp, sizeof(cmd)))
@@ -2273,7 +2288,7 @@ int s2226_ioctl(struct inode *inode, struct file *file,
 			dev->read_vid[i].ready = 1;
 		}
 #endif
-		//dprintk(3,"stop encode channel %d\n", cmd.idx);
+		/*dprintk(3, "stop encode channel %d\n", cmd.idx);*/
 		ret = s2226_stop_encode(dev, cmd.idx);
 		res_free(dev, fh, RES_STREAM);
 		dev->h51_reload_required  = 1;
@@ -2284,21 +2299,21 @@ int s2226_ioctl(struct inode *inode, struct file *file,
 		stop_param_t cmd;
 		int i;
 		if ((res_locked(dev, fh) & RES_STREAM) && !(res_check(fh) & RES_STREAM)) {
-			// other handle owns the streaming resource
-			// (If no handle owns resource, allow re-sending
-			//  a stop encode or decode command even if stream
-			//  not running)
+			/* other handle owns the streaming resource
+			   (If no handle owns resource, allow re-sending
+			   a stop encode or decode command even if stream
+			   not running) */
 			return 0;
 		}
 		if (copy_from_user(&cmd, argp, sizeof(cmd)))
 			return -EINVAL;
-		// kill the urbs
+		/* kill the urbs */
 		dprintk(2, "s2226, stop decode, kill urbs\n");
 		for (i = 0; i < WR_URBS; i++) {
 			usb_kill_urb(dev->write_vid[i].urb);
 			dev->write_vid[i].ready = 1;
 		}
-		//dprintk(3,"stop encode channel %d\n", cmd.idx);
+		/*dprintk(3, "stop encode channel %d\n", cmd.idx);*/
 		ret = s2226_stop_decode(dev, cmd.idx);
 		res_free(dev, fh, RES_STREAM);
 		dev->h51_reload_required  = 1;
@@ -2306,7 +2321,7 @@ int s2226_ioctl(struct inode *inode, struct file *file,
 	}
 	case S2226_IOC_GET_STATUS:
 	{
-		// TODO
+		/* TODO */
 		return -EINVAL;
 	}
 	case S2226_IOC_SDII_WR:
@@ -2362,7 +2377,8 @@ int s2226_ioctl(struct inode *inode, struct file *file,
 			return -EINVAL;
 		dprintk(2, "Fpga write %x:%x\n", cmd.addr, cmd.val);
 		ret = send_fpga_write(dev, cmd.addr, cmd.val);
-		if (ret < 0) return ret;
+		if (ret < 0)
+			return ret;
 		break;
 	}
 	case S2226_IOC_FPGA_WR_BURST:
@@ -2372,7 +2388,8 @@ int s2226_ioctl(struct inode *inode, struct file *file,
 			return -EINVAL;
 		dprintk(2, "fpga write burst %x\n", cmd.addr);
 		ret = send_fpga_write_burst(dev, cmd.addr, cmd.data, cmd.len, FPGA_WRITE_NORMAL);
-		if (ret < 0) return ret;
+		if (ret < 0)
+			return ret;
 		break;
 	}
 	case S2226_IOC_FPGA_WR_BURST_FAST:
@@ -2386,7 +2403,8 @@ int s2226_ioctl(struct inode *inode, struct file *file,
 			return -EINVAL;
 		dprintk(2, "S2226_IOC_FPGA_WR_BURST_FAST %x\n", cmd.addr);
 		ret = send_fpga_write_burst(dev, cmd.addr, cmd.data, cmd.len, FPGA_WRITE_FAST);
-		if (ret < 0) return ret;
+		if (ret < 0)
+			return ret;
 		break;
 	}
 	case S2226_IOC_FPGA_WR_ADDRDATA:
@@ -2400,7 +2418,8 @@ int s2226_ioctl(struct inode *inode, struct file *file,
 			return -EINVAL;
 		dprintk(2, "S2226_IOC_FPGA_WR_ADDRDATA %x\n", cmd.addr);
 		ret = send_fpga_write_burst(dev, cmd.addr, cmd.data, cmd.len, FPGA_WRITE_ADDRDATA);
-		if (ret < 0) return ret;
+		if (ret < 0)
+			return ret;
 		break;
 	}
 	case S2226_IOC_FPGA_RD:
@@ -2432,7 +2451,8 @@ int s2226_ioctl(struct inode *inode, struct file *file,
 			return -EINVAL;
 		dprintk(2, "h51 write %x:%x\n", cmd.addr, cmd.val);
 		ret = send_h51_regwr(dev, cmd.addr, cmd.val);
-		if (ret < 0) return ret;
+		if (ret < 0)
+			return ret;
 		break;
 	}
 	case S2226_IOC_H51_RD:
@@ -2485,12 +2505,13 @@ int s2226_ioctl(struct inode *inode, struct file *file,
 		}
 		if (copy_from_user(&p, argp, sizeof(p)))
 			return -EINVAL;
-		// protect our memory space
+		/* protect our memory space */
 		if (!mfgmode && (p.addr < 0x10000))
 			return -EINVAL;
 		dprintk(2, "flash write addr:%x, len:%x\n", p.addr, p.len);
 		ret = send_flash_write(dev, p.addr, p.data, p.len);
-		if (ret < 0) return ret;
+		if (ret < 0)
+			return ret;
 		break;
 	}
 	case S2226_IOC_FLASH_RD:
@@ -2500,7 +2521,8 @@ int s2226_ioctl(struct inode *inode, struct file *file,
 			return -EINVAL;
 		dprintk(2, "flash read addr:%x, len:%x\n", p.addr, p.len);
 		ret = send_flash_read(dev, p.addr, p.len, p.data, &p.len);
-		if (ret < 0) return ret;
+		if (ret < 0)
+			return ret;
 		ret = copy_to_user(argp, &p, sizeof(p));
 		break;
 	}
@@ -2513,23 +2535,25 @@ int s2226_ioctl(struct inode *inode, struct file *file,
 		}
 		if (copy_from_user(&p, argp, sizeof(p)))
 			return -EINVAL;
-		// protect our memory space for 
+		/* protect our memory space for */
 		if (!mfgmode && (p.addr < 0x10000))
 			return -EINVAL;
 		dprintk(2, "flash erase addr:%x, len:%x\n", p.addr, p.len);
 		ret = send_flash_erase(dev, p.addr, p.len);
 		printk(KERN_INFO "s2226: flash erase %d\n", ret);
-		if (ret < 0) return ret;
+		if (ret < 0)
+			return ret;
 		break;
 	}
 	case S2226_IOC_BOOT_H51:
-		printk("s226: ioc boot h51\n");
+		printk(KERN_INFO "s226: ioc boot h51\n");
 		if (res_locked(dev, fh) & RES_STREAM) {
 			printk(KERN_INFO "s2226: boot, device busy(streaming)\n");
 			return -EBUSY;
 		}
 		ret = send_h51_boot(dev);
-		if (ret < 0) return ret;
+		if (ret < 0)
+			return ret;
 		break;
 	case S2226_IOC_BOOT_FPGA:
 		if (res_locked(dev, fh) & RES_STREAM) {
@@ -2537,7 +2561,8 @@ int s2226_ioctl(struct inode *inode, struct file *file,
 			return -EBUSY;
 		}
 		ret = send_fpga_boot(dev);
-		if (ret < 0) return ret;
+		if (ret < 0)
+			return ret;
 		break;
 	case S2226_IOC_SET_INPUT:
 		dprintk(3, "set input %d\n", (int)arg);
@@ -2546,10 +2571,9 @@ int s2226_ioctl(struct inode *inode, struct file *file,
 			return -EBUSY;
 		}
 		ret = s2226_set_attr(dev, ATTR_INPUT, arg);
-		if (dev->fpga_ver <= 0) {
+		if (dev->fpga_ver <= 0)
 			s2226_get_fpga_ver(dev);
-		}
-		if (1) { //ret == 0) {
+		if (1) {
 			int rc;
 			rc = s2226_new_input(dev, arg);
 			if (rc != 0)
@@ -2570,7 +2594,8 @@ int s2226_ioctl(struct inode *inode, struct file *file,
 			return -EINVAL;
 		dprintk(3, "ioc_audio_wr  %d %x\n", cmd.addr, cmd.value);
 		ret = send_aic33_wr(dev, cmd.addr, cmd.value);
-		if (ret < 0) return ret;
+		if (ret < 0)
+			return ret;
 		break;
 	}
 	case S2226_IOC_AUDIO_RD:
@@ -2624,11 +2649,11 @@ int s2226_ioctl(struct inode *inode, struct file *file,
 #endif
 //	case S2226_IOC_RESET_H51:
 	case S2226_IOC_RESET_BOARD:
-		// If resetting from user space, should do the following
-		// S2226_IOC_RESET_BOARD
-		// sleep(2)  // let ARM load
-		// S2226_IOC_PRIME_FX2
-		// S2226_IOC_DEFAULT_PARAMS
+		/* If resetting from user space, should do the following
+		   S2226_IOC_RESET_BOARD
+		   sleep(2)
+		   S2226_IOC_PRIME_FX2
+		   S2226_IOC_DEFAULT_PARAMS */
 		ret = s2226_reset_board(dev);
 		break;
 	case S2226_IOC_ARM_VER:
@@ -2645,13 +2670,13 @@ int s2226_ioctl(struct inode *inode, struct file *file,
 		dprintk(2, "%s FX2SAM_HI %d\n", __func__, ret);
 		break;
 	case S2226_IOC_NOP:
-		// sends NOP to the ARM. For use in firmware 
-		// if ARM does not 
+		/* sends NOP to the ARM. For use in firmware
+		   if ARM does not */
 		ret = s2226_send_nop(dev, 1);
 		dprintk(2, "%s NOP %d\n", __func__, ret);
 		break;
 	case S2226_IOC_RESET_USB:
-		// if firmware corrupt, we may have to reset the USB also
+		/* if firmware corrupt, we may have to reset the USB also */
 		if (dev->users > 1) {
 			printk(KERN_INFO "s2226: RESET_USB device busy\n");
 			return -EBUSY;
@@ -2708,7 +2733,7 @@ int s2226_ioctl(struct inode *inode, struct file *file,
 		default:
 			return -EINVAL;
 		}
-		dprintk(3,"get level: idx %d, val %d\n", lvl.idx, lvl.val);
+		dprintk(3, "get level: idx %d, val %d\n", lvl.idx, lvl.val);
 		ret = copy_to_user(argp, &lvl, sizeof(struct level_param));
 		break;
 	}
@@ -2718,7 +2743,7 @@ int s2226_ioctl(struct inode *inode, struct file *file,
 		struct level_param lvl;
 		if (copy_from_user(&lvl, argp, sizeof(struct level_param)))
 			return -EINVAL;
-		dprintk(3,"set level: idx %d, val %d\n", lvl.idx, lvl.val);
+		dprintk(3, "set level: idx %d, val %d\n", lvl.idx, lvl.val);
 		switch (lvl.idx) {
 		case S2226_LEVEL_BRIGHTNESS:
 			s2226_set_brightness(dev, lvl.val);
@@ -2741,13 +2766,13 @@ int s2226_ioctl(struct inode *inode, struct file *file,
 	case S2226_IOC_FX2_VER:
 	{
 		char buf[64];
-		int siz = 64; // EP0 is 64 bytes max
+		int siz = 64; /* EP0 is 64 bytes max */
 		ret = s2226_vendor_request(dev,
-					   0x30,	// IOCTL_USBSAMP_FIRMWARE_REV
-					   0, 0,	// val, idx
-					   buf, //pbuf
-					   siz,	// len
-					   0);	// bIn
+					   0x30,/* IOCTL_USBSAMP_FIRMWARE_REV*/
+					   0, 0,	/* val, idx*/
+					   buf,
+					   siz,
+					   0);	/* bIn */
 		if (ret > 0)
 			dprintk(0, "USB firmware version %x.%02x\n", buf[1], buf[0]);
 		else
@@ -2766,12 +2791,11 @@ int s2226_ioctl(struct inode *inode, struct file *file,
 	}
 	case S2226_IOC_UNLOCK_OVERLAY:
 	{
-		if (res_check(fh) & RES_OVERLAY) {
+		if (res_check(fh) & RES_OVERLAY)
 			res_free(dev, fh, RES_OVERLAY);
-		}
 		ret = 0;
+		break;
 	}
-
 	default:
 		ret = -EINVAL;
 		break;
@@ -2785,7 +2809,7 @@ static void s2226_delete(struct kref *kref)
 {
 	struct s2226_dev *dev = to_s2226_dev(kref);
 	int i;
-	
+
 	kfree(dev->interrupt_buffer);
 	kfree(dev->control_buffer);
 	for (i = 0; i < WR_URBS; i++) {
@@ -2800,11 +2824,10 @@ static void s2226_delete(struct kref *kref)
 	usb_free_urb(dev->control_urb);
 	usb_put_dev(dev->udev);
 	s2226_exit_v4l(dev);
-	kfree (dev);
+	kfree(dev);
 	printk(KERN_INFO "s2226 memory released\n");
 }
 
-// when device is opened
 static int s2226_open(struct inode *inode, struct file *file)
 {
 	struct s2226_dev *dev;
@@ -2812,11 +2835,11 @@ static int s2226_open(struct inode *inode, struct file *file)
 	struct usb_interface *interface;
 	int subminor;
 	int retval = 0;
-	dprintk(2,"s2226_open\n");
+	dprintk(2, "s2226_open\n");
 	subminor = iminor(inode);
 	interface = usb_find_interface(&s2226_driver, subminor);
 	if (!interface) {
-		printk("%s - error, can't find device for minor %d", __FUNCTION__, subminor);
+		printk(KERN_INFO "%s - error, can't find device for minor %d", __func__, subminor);
 		retval = -ENODEV;
 		goto exit_err;
 	}
@@ -2827,54 +2850,48 @@ static int s2226_open(struct inode *inode, struct file *file)
 	}
 
 	if (s2226_mutex_lock_interruptible(&s2226_devices_lock)) {
-		printk("could not acquire lock s2226_open\n");
+		printk(KERN_INFO "could not acquire lock s2226_open\n");
 		return -ERESTARTSYS;
 	}
-	if (dev->users > 0)	{
+	if (dev->users > 0)
 		dprintk(4, "s2226:  device already open.\n");
-	}
-    
-	// allocate file context data
-	fh = kmalloc(sizeof(struct s2226_fh),GFP_KERNEL);
+	/* allocate file context data */
+	fh = kmalloc(sizeof(struct s2226_fh), GFP_KERNEL);
 	if (NULL == fh) {
 		printk(KERN_INFO "s2226: out of memory\n");
 		s2226_mutex_unlock(&s2226_devices_lock);
 		return -ENOMEM;
 	}
-	memset(fh,0,sizeof(struct s2226_fh));
+	memset(fh, 0, sizeof(struct s2226_fh));
 	dprintk(1, "opened dev [%d] %p\n", subminor, dev);
 	file->private_data = fh;
-	fh->dev            = dev;
-	// increment our usage count for the device 
+	fh->dev = dev;
+	/* increment our usage count for the device */
 	dev->users++;
 	dprintk(1, "s2226: number of users %d\n", dev->users);
 	kref_get(&dev->kref);
 	s2226_mutex_unlock(&s2226_devices_lock);
 	return 0;
 exit_err:
-	if (fh) {
-		kfree( fh);
-	}
+	kfree(fh);
 	return retval;
 }
 
-// when device is released
 static int s2226_release(struct inode *inode, struct file *file)
 {
 	struct s2226_fh         *fh = file->private_data;
 	struct s2226_dev        *dev;
 	int i;
 	int res;
-	if (s2226_mutex_lock_interruptible(&s2226_devices_lock)) {
+	if (s2226_mutex_lock_interruptible(&s2226_devices_lock))
 		return -ERESTARTSYS;
-	}
 	if (fh == NULL) {
-		s2226_mutex_unlock( &s2226_devices_lock);
+		s2226_mutex_unlock(&s2226_devices_lock);
 		return -ENODEV;
 	}
 	dev = fh->dev;
-	if (dev == NULL) { 
-		s2226_mutex_unlock( &s2226_devices_lock);
+	if (dev == NULL) {
+		s2226_mutex_unlock(&s2226_devices_lock);
 		return -ENODEV;
 	}
 	res = res_check(fh);
@@ -2895,11 +2912,10 @@ static int s2226_release(struct inode *inode, struct file *file)
 		}
 		res_free(dev, fh, res);
 	}
-	kfree (fh);
+	kfree(fh);
 	dev->users--;
-
-	s2226_mutex_unlock( &s2226_devices_lock);
-	// decrement the count on our device
+	s2226_mutex_unlock(&s2226_devices_lock);
+	/* decrement the count on our device */
 	kref_put(&dev->kref, s2226_delete);
 	return 0;
 }
@@ -2920,14 +2936,13 @@ static void s2226_read_vid_callback(struct urb *u)
 	urb->ready = 1;
 
 	for (i = 0; urb != &urb->dev->read_vid[i]; i++)
-		; // find the index of the urb that completed
+		; /* find the index of the urb that completed */
 
 	dprintk(4, "s2226_read_vid_callback %d\n", i);
-	if (urb_context == S2226_CONTEXT_V4L) {	
+	if (urb_context == S2226_CONTEXT_V4L) {
 #ifdef CONFIG_S2226_V4L
-		
 		s2226_got_data(dev, i);
-		// submit the urb again
+		/* submit the urb again */
 		dprintk(4, "data from URB %d, resubmit URB\n", i);
 		usb_fill_bulk_urb(dev->read_vid[i].urb, dev->udev,
 				  usb_rcvbulkpipe(dev->udev, dev->ep[INDEX_EP_H264]),
@@ -2935,7 +2950,7 @@ static void s2226_read_vid_callback(struct urb *u)
 				  S2226_RB_PKT_SIZE,
 				  s2226_read_vid_callback,
 				  &dev->read_vid[i]);
-		//dev->read_vid[i].ready = 0;
+		/*dev->read_vid[i].ready = 0;*/
 		(void) usb_submit_urb(dev->read_vid[i].urb, GFP_ATOMIC);
 #else
 		printk(KERN_ERR "invalid context.  V4L support not compiled into driver\n");
@@ -2954,9 +2969,9 @@ static ssize_t s2226_read_vid(struct file *file, char *buffer, size_t nbytes,
 	struct s2226_dev *dev = (struct s2226_dev *) fh->dev;
 	int i;
 	int rc;
-	// only let the handle that started the encode do the reading
+	/* only let the handle that started the encode do the reading */
 	if (res_locked(dev, fh) & RES_STREAM) {
-		// if locked
+		/* if locked */
 		if (!(res_check(fh) & RES_STREAM)) {
 			printk(KERN_INFO "s2226: other file handle owns resource. read failed\n");
 			return 0;
@@ -2967,13 +2982,14 @@ static ssize_t s2226_read_vid(struct file *file, char *buffer, size_t nbytes,
 		return -EINVAL;
 
 	i = dev->read_vid_head++;
-	if (i+1 == RD_URBS) dev->read_vid_head = 0;
+	if (i+1 == RD_URBS)
+		dev->read_vid_head = 0;
 	while (dev->read_vid[i].ready == 0) {
 		rc = wait_event_interruptible_timeout(dev->read_vid_wq,
 						      (dev->read_vid[i].ready != 0),
 						      msecs_to_jiffies(6000));
 		dprintk(4, "%s wait ready: %d\n", __func__, rc);
-		if (rc <= 0) // interrupted or timeout
+		if (rc <= 0) /* interrupted or timeout */
 			return rc;
 	}
 
@@ -2999,7 +3015,7 @@ static ssize_t s2226_read_vid(struct file *file, char *buffer, size_t nbytes,
 #if LINUX_VERSION_CODE >= KERNEL_VERSION_USBCOMPLETE_CHANGED
 static void s2226_write_vid_callback(struct urb *u)
 #else
-	static void s2226_write_vid_callback(struct urb *u, struct pt_regs *ptregs)
+static void s2226_write_vid_callback(struct urb *u, struct pt_regs *ptregs)
 #endif
 {
 	struct s2226_urb *urb;
@@ -3008,7 +3024,7 @@ static void s2226_write_vid_callback(struct urb *u)
 	urb->ready = 1;
 	urb->dev->write_vid_ready = 1;
 	for (i = 0; urb != &urb->dev->write_vid[i]; i++)
-		; // find the index of the urb that completed
+		; /* find the index of the urb that completed */
 	dprintk(4, "s2226_write_vid_callback %d\n", i);
 	wake_up(&urb->dev->write_vid_wq);
 	return;
@@ -3022,13 +3038,11 @@ static ssize_t s2226_write_vid(struct file *file, const char *buffer, size_t nby
 	struct s2226_dev *dev = (struct s2226_dev *) fh->dev;
 	size_t writesize;
 	int i = 0;
-	
-	writesize = (nbytes > MAX_USB_SIZE) ? MAX_USB_SIZE : nbytes;
 
+	writesize = (nbytes > MAX_USB_SIZE) ? MAX_USB_SIZE : nbytes;
 	if (writesize == 0)
 		return 0;
-
-	// find an available urb
+	/* find an available urb */
 	while (!dev->write_vid[i].ready) {
 		i++;
 		if (i >= WR_URBS) {
@@ -3038,32 +3052,30 @@ static ssize_t s2226_write_vid(struct file *file, const char *buffer, size_t nby
 								  (dev->write_vid_ready != 0),
 								  msecs_to_jiffies(5000));
 			if (retval <= 0) {
-				printk("retval %x\n", retval);
+				printk(KERN_INFO "retval %x\n", retval);
 				return retval;
 			}
-			if (!dev->write_vid_ready) {
+			if (!dev->write_vid_ready)
 				return -EFAULT;
-			}
 		}
 	}
-	dprintk(4,"s2226_write_vid: %d %p %d\n", i, dev->write_vid[i].buffer, (int)writesize);
-    
+	dprintk(4, "s2226_write_vid: %d %p %d\n", i,
+		dev->write_vid[i].buffer, (int)writesize);
+
 	if (copy_from_user(dev->write_vid[i].buffer, buffer, writesize)) {
 		printk(KERN_ERR "s2226 write video\n");
 		return -EFAULT;
 	}
 	if (dev->udev == NULL)
 		return -ENODEV;
-	//dprintk(4, "s2226_vwrite 2\n");
 	dev->write_vid[i].ready = 0;
 	usb_fill_bulk_urb(dev->write_vid[i].urb, dev->udev,
 			  usb_sndbulkpipe(dev->udev, dev->ep[INDEX_EP_H264]),
 			  (void *) dev->write_vid[i].buffer,
 			  writesize,
 			  s2226_write_vid_callback, (void *) &dev->write_vid[i]);
-	//dprintk(4, "s2226_vwrite 3\n");
 	retval = usb_submit_urb(dev->write_vid[i].urb, GFP_KERNEL);
-	
+
 	if (retval) {
 		printk(KERN_ERR "failed to submit URB %d\n", retval);
 		return retval;
@@ -3078,7 +3090,7 @@ static int read_interrupt_endpoint(struct s2226_dev *dev, int timeout)
 	int interruptsize = MAX_USB_INT_SIZE;
 	int retval;
 	int actual_length;
-	char* pdata;
+	char *pdata;
 	retval = usb_bulk_msg(dev->udev,
 			      usb_rcvbulkpipe(dev->udev, dev->ep[INDEX_EP_RESP]),
 			      dev->interrupt_buffer,
@@ -3102,35 +3114,32 @@ static int write_control_endpoint(struct s2226_dev *dev, int timeout)
 	int controlsize = 512;
 	int retval;
 	int actual_length;
-	if (!dev->udev) return -ENODEV;
-    
+	if (!dev->udev)
+		return -ENODEV;
 	retval = usb_bulk_msg(dev->udev,
 			      usb_sndbulkpipe(dev->udev, dev->ep[INDEX_EP_CONTROL]),
 			      dev->control_buffer,
 			      controlsize,
 			      &actual_length,
 			      timeout);
-
 	if (retval < 0)
 		dprintk(1, "write control endpoint got %d\n", retval);
-    
 	return retval;
 }
 
-unsigned int s2226_poll (struct file *file, poll_table *wait)
+unsigned int s2226_poll(struct file *file, poll_table *wait)
 {
 	struct s2226_fh *fh = (struct s2226_fh *) file->private_data;
 	struct s2226_dev *dev = (struct s2226_dev *) fh->dev;
 	unsigned int mask = 0;
-	
+
 	poll_wait(file, &dev->read_vid_wq, wait);
-	if (dev->read_vid[dev->read_vid_head].ready == 1) {
+	if (dev->read_vid[dev->read_vid_head].ready == 1)
 		mask |= POLLIN | POLLRDNORM;
-	}
 	return mask;
 }
 
-static struct file_operations s2226_vfops = {
+static const struct file_operations s2226_vfops = {
 	.owner =    THIS_MODULE,
 	.open =     s2226_open,
 	.compat_ioctl = s2226_ioctl_compat,
@@ -3146,10 +3155,10 @@ static struct file_operations s2226_vfops = {
 };
 
 
-#define EXPECTED_IN_EPS  1   //(depending on board rev, may have 1 or 2 in eps)
-#define EXPECTED_OUT_EPS 2   // TODO: currently the interrupt endpoint is a bulk out ep
+#define EXPECTED_IN_EPS  1   /*(depending on board rev, may have 1 or 2 in eps)*/
+#define EXPECTED_OUT_EPS 2   /* TODO: currently the interrupt endpoint is a bulk out ep*/
 
-/* 
+/*
  * usb class driver info in order to get a minor number from the usb core,
  * and to have the device registered with the driver core
  */
@@ -3164,7 +3173,7 @@ static void s2226_init_audio(struct s2226_audio *aud)
 	aud->iRoute = -1;
 	return;
 }
-// probe function.  when USB device is detected by system
+
 static int s2226_probe(struct usb_interface *interface, const struct usb_device_id *id)
 {
 	struct s2226_dev *dev = NULL;
@@ -3175,14 +3184,14 @@ static int s2226_probe(struct usb_interface *interface, const struct usb_device_
 	int in_count = 0; /* number of in endpoints */
 	int out_count = 0; /* number of out endpoints */
 	int retval = -ENOMEM;
-	// required sleep for device to boot.  do not remove
+	/* required sleep for device to boot.  do not remove */
 	msleep(1150);
 	printk(KERN_INFO "[s2226] %s\n", S2226_DRIVER_VERSION_STRING);
 
 	/* allocate memory for our device state and initialize it to zero */
-	dev = (struct s2226_dev *) kzalloc(sizeof(*dev), GFP_KERNEL);
+	dev = kzalloc(sizeof(*dev), GFP_KERNEL);
 	if (dev == NULL) {
-		printk("s2226: out of memory");
+		printk(KERN_INFO "s2226: out of memory");
 		goto error;
 	}
 	dev->fpga_ver = -1;
@@ -3191,9 +3200,9 @@ static int s2226_probe(struct usb_interface *interface, const struct usb_device_
 	s2226_init_audio(&dev->aud);
 	dev->udev = usb_get_dev(interface_to_usbdev(interface));
 	dev->interface = interface;
-	// set up the endpoint information 
+	/* set up the endpoint information */
 	iface_desc = interface->cur_altsetting;
-	dprintk(4, "num endpoints %d\n" ,iface_desc->desc.bNumEndpoints);
+	dprintk(4, "num endpoints %d\n", iface_desc->desc.bNumEndpoints);
 	for (i = 0; i < iface_desc->desc.bNumEndpoints; ++i) {
 		endpoint = &iface_desc->endpoint[i].desc;
 		if (i < MAX_ENDPOINTS)
@@ -3214,31 +3223,28 @@ static int s2226_probe(struct usb_interface *interface, const struct usb_device_
 	}
 
 	if ((in_count < EXPECTED_IN_EPS) || (out_count != EXPECTED_OUT_EPS)) {
-		printk("Could not find correct number of endpoints \n");
+		printk(KERN_INFO "Could not find correct number of endpoints\n");
 		goto error;
 	}
-
-	// save our data pointer in this interface device 
+	/* save our data pointer in this interface device */
 	usb_set_intfdata(interface, dev);
-
-	// initialize locks 
+	/* initialize locks */
 	s2226_mutex_init(&dev->ioctl_lock);
 	s2226_mutex_init(&dev->audlock);
 	s2226_mutex_init(&dev->cmdlock);
 	/* we can register the device now, as it is ready */
-
-	dprintk(4,"before usb register video register intfdata %p\n", dev);
+	dprintk(4, "before usb register video register intfdata %p\n", dev);
 	retval = usb_register_dev(interface, &s2226_class);
-	dprintk(4,"after usb register video register intfdata %p\n", dev);
+	dprintk(4, "after usb register video register intfdata %p\n", dev);
 	if (retval) {
 		/* something prevented us from registering this driver */
-		printk("Not able to get a minor for this device.");
+		printk(KERN_INFO "Not able to get a minor for this device.");
 		usb_set_intfdata(interface, NULL);
 		goto error;
 	}
 
 	/* let the user know what node this device is now attached to */
-	dprintk(0,"USB 2226 device now attached to USBs2226-%d", interface->minor);
+	dprintk(0, "USB 2226 device now attached to USBs2226-%d", interface->minor);
 
 	dev->interrupt_buffer = kmalloc(MAX_USB_INT_SIZE, GFP_KERNEL);
 	if (dev->interrupt_buffer == NULL) {
@@ -3265,7 +3271,7 @@ static int s2226_probe(struct usb_interface *interface, const struct usb_device_
 			goto errorUR;
 		}
 	}
-	
+
 	for (i = 0; i < RD_URBS; i++) {
 		dev->read_vid[i].urb = usb_alloc_urb(0, GFP_KERNEL);
 		if (dev->read_vid[i].urb == NULL) {
@@ -3291,25 +3297,20 @@ static int s2226_probe(struct usb_interface *interface, const struct usb_device_
 		retval = -ENOMEM;
 		goto errorUR;
 	}
-
 	init_waitqueue_head(&dev->read_vid_wq);
 	init_waitqueue_head(&dev->write_vid_wq);
-
 	dev->write_vid_ready = 1;
-
-	
 	kfree(pmem);
-
-	printk("s2226 successfully loaded\n");
+	printk(KERN_INFO "s2226 successfully loaded\n");
 	{
 		char buf[64];
-		int siz = 64; // EP0 is 64 bytes max
+		int siz = 64; /* EP0 is 64 bytes max */
 		retval = s2226_vendor_request(dev,
-					      0x30,	// IOCTL_USBSAMP_FIRMWARE_REV
-					      0, 0,	// val, idx
-					      buf, //pbuf
-					      siz,	// len
-					      0);	// bIn
+					      0x30, /* IOCTL_USBSAMP_FIRMWARE_REV*/
+					      0, 0, /* val, idx*/
+					      buf,
+					      siz,
+					      0); /* bIn */
 		if (retval > 0)
 			dprintk(0, "USB firmware version %x.%02x\n", buf[1], buf[0]);
 		else
@@ -3320,7 +3321,7 @@ static int s2226_probe(struct usb_interface *interface, const struct usb_device_
 	s2226_prime_fx2(dev);
 #if 1
 	retval = s2226_set_attr(dev, ATTR_INT_EP_PKTEND, 0);
-	
+
 	{
 		int fwver;
 		retval = s2226_get_attr(dev, ATTR_ARM_FW_VERSION, &fwver);
@@ -3337,10 +3338,10 @@ static int s2226_probe(struct usb_interface *interface, const struct usb_device_
 			printk(KERN_INFO "s2226: firmware out of date!\n");
 	}
 #endif
-	// set default parameters
+	/* set default parameters */
 	s2226_default_params(dev);
 
-	dprintk(4,"before probe done %p\n",dev);
+	dprintk(4, "before probe done %p\n", dev);
 	dev->h51_mode.gop = 0;
 	dev->h51_mode.vbr = 0;
 	dev->h51_mode.vBitrate = S2226_DEF_VBITRATE;
@@ -3356,33 +3357,31 @@ static int s2226_probe(struct usb_interface *interface, const struct usb_device_
 	dev->saturation = 0x40;
 	dev->contrast = 0x40;
 	s2226_probe_v4l(dev);
-	printk("s2226: probe success\n");
+	printk(KERN_INFO "s2226: probe success\n");
 	return 0;
 errorUR:
-	// unregister the driver.
+	/* unregister the driver. */
 	usb_deregister_dev(interface, &s2226_class);
 error:
-	if (pmem)
-		kfree(pmem);
-
+	kfree(pmem);
 	usb_set_intfdata(interface, NULL);
 	kref_put(&dev->kref, s2226_delete);
-	printk("s2226: probe failed\n");
+	printk(KERN_INFO "s2226: probe failed\n");
 	return retval;
 }
 
 
 
-// disconnect routine.  when board is removed physically or with rmmod
+/* disconnect routine.  when board is removed physically or with rmmod */
 static void s2226_disconnect(struct usb_interface *interface)
 {
 	struct s2226_dev *dev = NULL;
 	int minor = interface->minor;
-	dprintk(4,"s2226_DISCONNECT %d\n", minor);
-	// lock to prevent s2226_open() from racing s2226_disconnect() 
-	s2226_mutex_lock( &s2226_devices_lock);
+	dprintk(4, "s2226_DISCONNECT %d\n", minor);
+	/* lock to prevent s2226_open() from racing s2226_disconnect() */
+	s2226_mutex_lock(&s2226_devices_lock);
 	dev = usb_get_intfdata(interface);
-	// give back our minor 
+	/* give back our minor */
 	s2226_mutex_lock(&dev->ioctl_lock);
 	usb_deregister_dev(interface, &s2226_class);
 	s2226_mutex_unlock(&dev->ioctl_lock);
@@ -3393,19 +3392,16 @@ static void s2226_disconnect(struct usb_interface *interface)
 		wake_up(&dev->read_vid_wq);
 		/* wake up the write queue */
 		wake_up(&dev->write_vid_wq);
-	}
-	else { 
-		printk("dev null\n");
-	}
-	dprintk(4,"s2226_DISCONNECT2\n");
-	// close 2226 board core
+	} else
+		printk(KERN_INFO "dev null\n");
+
+	dprintk(4, "s2226_DISCONNECT2\n");
+	/* close 2226 board core */
 	dev->udev = NULL;
 	usb_set_intfdata(interface, NULL);
-	dprintk(4,"get intfdata %p\n", dev);
-
-	dprintk(4,"s2226_DISCONNECT5\n");
-
-	// decrement our usage count 
+	dprintk(4, "get intfdata %p\n", dev);
+	dprintk(4, "s2226_DISCONNECT5\n");
+	/* decrement our usage count */
 	kref_put(&dev->kref, s2226_delete);
 	s2226_mutex_unlock(&s2226_devices_lock);
 	printk(KERN_INFO "USB s2226 #%d now disconnected", minor);
@@ -3424,13 +3420,11 @@ static struct usb_driver s2226_driver = {
 static int __init usb_s2226_init(void)
 {
 	int result;
-	// register this driver with the USB subsystem 
-	s2226_mutex_init( &s2226_devices_lock);
+	/* register this driver with the USB subsystem */
+	s2226_mutex_init(&s2226_devices_lock);
 	result = usb_register(&s2226_driver);
-	if (result) {
-		printk("usb_register failed. Error number %d", result);
-	}
-
+	if (result)
+		printk(KERN_INFO "usb_register failed. Error number %d", result);
 	dprintk(2, "s2226_init: done\n");
 	return result;
 }
@@ -3441,8 +3435,7 @@ static void __exit usb_s2226_exit(void)
 	usb_deregister(&s2226_driver);
 }
 
-
-int s2226_vendor_request(void *pdev, unsigned char req, 
+int s2226_vendor_request(void *pdev, unsigned char req,
 			 unsigned short idx, unsigned short val,
 			 void *pbuf, unsigned int len,
 			 int bOut)
@@ -3496,59 +3489,47 @@ static int s2226_reset_board(struct s2226_dev *dev)
 	int siz = 64;
 	int ret;
 	dprintk(3, "reset h51\n");
-	// does not apply to latest firmware
-	if (dev->usb_ver >= 0x20) {
+	/* does not apply to latest firmware */
+	if (dev->usb_ver >= 0x20)
 		return -EINVAL;
-	}
-
-	// send vendor cmd to assert ARM reset
+	/* send vendor cmd to assert ARM reset */
 	ret = s2226_vendor_request(dev, S2226_VR_ARM_RESET_ASSERT,
-				   0, 0,	// val, idx
-				   buf, //pbuf
-				   siz,	// len
-				   0);	// bIn
+				   0, 0, buf, siz, 0);
 	msleep(10);
-	// send vendor cmd to de-assert ARM reset
+	/* send vendor cmd to de-assert ARM reset */
 	ret = s2226_vendor_request(dev,
 				   S2226_VR_ARM_RESET_DEASSERT,
-				   0, 0,	// val, idx
-				   buf, //pbuf
-				   siz,	// len
-				   0);	// bIn
-	// wait for board to come up
+				   0, 0, buf, siz, 0);
+	/* wait for board to come up */
 	msleep(1150);
-	// board reset, make sure board put back at default interface.
+	/* board reset, make sure board put back at default interface. */
 	s2226_set_interface(dev, 0, 0);
 	return ret;
 }
 
-#define S2226_VR_LOAD_NEWFW   0x57  // FX2SAM high
-#define S2226_VR_LOAD_ORIGFW  0x58  // FX2SAM low
+#define S2226_VR_LOAD_NEWFW   0x57  /* FX2SAM high */
+#define S2226_VR_LOAD_ORIGFW  0x58  /* FX2SAM low */
 
 static int s2226_fx2sam(struct s2226_dev *dev, int bNewFw)
 {
-	
 	char buf[64];
 	int siz = 64;
 	int rc;
 	rc = s2226_vendor_request(dev,
 				  bNewFw ? S2226_VR_LOAD_NEWFW : S2226_VR_LOAD_ORIGFW,
-				  0, 0,
-				  buf, //pbuf
-				  siz,	// len
-				  0);	// bIn
+				  0, 0, buf, siz, 0);
 	return rc;
 }
 
 static int s2226_default_params(struct s2226_dev *dev)
 {
 	int rc;
-	// switch to pktend mode for efficiency
+	/* switch to pktend mode for efficiency */
 	rc = s2226_set_attr(dev, ATTR_INT_EP_PKTEND, 1);
-	if (rc != 0) return rc;
+	if (rc != 0)
+		return rc;
 	return rc;
 }
-
 
 static int SetAudioRightAGC(struct s2226_dev *dev, int bOn, int gain)
 {
@@ -3563,13 +3544,13 @@ static int SetAudioRightAGC(struct s2226_dev *dev, int bOn, int gain)
 	if (dev->is_decode)
 		return 0;
 	if (bOn) {
-		// turn on AGC right
+		/* turn on AGC right */
 		dprintk(2, "AGC R on, gain %d\n", gain);
 		send_aic33_wr(dev, 29, 0x80);
 		send_aic33_wr(dev, 30, (unsigned char) gain);
 		send_aic33_wr(dev, 31, 0x3e);
 	} else {
-		// turn off AGC right
+		/* turn off AGC right */
 		dprintk(2, "AGC R off\n");
 		send_aic33_wr(dev, 29, 0x00);
 	}
@@ -3589,13 +3570,13 @@ static int SetAudioLeftAGC(struct s2226_dev *dev, int bOn, int gain)
 	if (dev->is_decode)
 		return 0;
 	if (dev->aud.bAGC_L) {
-		// turn on AGC left
+		/* turn on AGC left */
 		dprintk(2, "AGC L on, gain %d\n", gain);
 		send_aic33_wr(dev, 26, 0x80);
 		send_aic33_wr(dev, 27, (unsigned char) gain);
 		send_aic33_wr(dev, 28, 0x3e);
 	} else {
-		// turn off AGC left
+		/* turn off AGC left */
 		dprintk(2, "AGC L off\n");
 		send_aic33_wr(dev, 26, 0x00);
 	}
@@ -3648,7 +3629,7 @@ static int SetAudioBalL(struct s2226_dev *dev, int bBal)
 	switch (dev->aud.iRoute) {
 	case AUDIOROUTE_LINE1L:
 	case AUDIOROUTE_LINE1L_BYPASS:
-		send_aic33_wr(dev, 19, bBal ? 0x84 : 0x04); //LINE1L to Left ADC
+		send_aic33_wr(dev, 19, bBal ? 0x84 : 0x04); /*LINE1L to Left ADC*/
 		break;
 	}
 	return 0;
@@ -3667,7 +3648,7 @@ static int SetAudioBalR(struct s2226_dev *dev, int bBal)
 	switch (dev->aud.iRoute) {
 	case AUDIOROUTE_LINE1L:
 	case AUDIOROUTE_LINE1L_BYPASS:
-		send_aic33_wr(dev, 22, bBal ? 0x84 : 0x04); //LINE1R to Left ADC
+		send_aic33_wr(dev, 22, bBal ? 0x84 : 0x04); /*LINE1R to Left ADC*/
 		break;
 	}
 	return 0;
@@ -3675,7 +3656,7 @@ static int SetAudioBalR(struct s2226_dev *dev, int bBal)
 
 static int SetAudioIn(struct s2226_dev *dev)
 {
-	// input must be set
+	/* input must be set */
 	if (!dev->input_set)
 		return -1;
 	SetAudioLeftAGC(dev, dev->aud.bAGC_L, dev->aud.iAGCLeftGain);
@@ -3698,7 +3679,7 @@ static int SetAudioVol(struct s2226_dev *dev, int gainL, int gainR, int muteL, i
 
 	if (!dev->input_set)
 		return -1;
-	// set audio out DAC settings (right, left)
+	/* set audio out DAC settings (right, left) */
 	val = dev->aud.bVolMuteL ? 0x80 : 0;
 	if (dev->aud.iVolGainL > 0x7f)
 		dev->aud.iVolGainL = 0x7f;
@@ -3718,7 +3699,7 @@ static int SetAudioMono(struct s2226_dev *dev, int gain, int mute)
 	dev->aud.iMonoGain = gain;
 	dev->aud.bMonoMute = mute;
 
-	// set audio out Mono settings(extra gain, balanced)
+	/* set audio out Mono settings(extra gain, balanced) */
 	if (dev->aud.iMonoGain > 9)
 		dev->aud.iMonoGain = 9;
 	if (!dev->input_set)
@@ -3736,18 +3717,18 @@ static int SetAudioHp(struct s2226_dev *dev, int gainL, int gainR, int muteL, in
 	dev->aud.bHpMuteR = muteR;
 	dev->aud.bHpMuteL = muteL;
 
-	// set audio out Hp settings(extra gain, balanced)
+	/* set audio out Hp settings(extra gain, balanced) */
 	if (dev->aud.iHpGainL > 9)
 		dev->aud.iHpGainL = 9;
 	if (dev->aud.iHpGainR > 9)
 		dev->aud.iHpGainR = 9;
 	if (!dev->input_set)
 		return -1;
-	send_aic33_wr(dev, 58, dev->aud.iHpGainL << 4 | 0x05);//common left
-	send_aic33_wr(dev, 51, dev->aud.iHpGainL << 4 | (dev->aud.bHpMuteL ? 0x05 : 0x0d));//out left
-	send_aic33_wr(dev, 65, dev->aud.iHpGainR << 4 | (dev->aud.bHpMuteL ? 0x05 : 0x0d));//out right
-	// power down the common on 2226, not connected
-	send_aic33_wr(dev, 72, dev->aud.iHpGainR << 4 | 0x05);//right common
+	send_aic33_wr(dev, 58, dev->aud.iHpGainL << 4 | 0x05);/* common left */
+	send_aic33_wr(dev, 51, dev->aud.iHpGainL << 4 | (dev->aud.bHpMuteL ? 0x05 : 0x0d));/*out left*/
+	send_aic33_wr(dev, 65, dev->aud.iHpGainR << 4 | (dev->aud.bHpMuteL ? 0x05 : 0x0d));/*out right*/
+	/* power down the common on 2226, not connected */
+	send_aic33_wr(dev, 72, dev->aud.iHpGainR << 4 | 0x05);/* right common */
 	return 0;
 }
 
@@ -3760,7 +3741,7 @@ static int SetAudioStereo(struct s2226_dev *dev, int gainL, int gainR, int muteL
 	dev->aud.bStereoMuteR = muteR;
 	dev->aud.bStereoMuteL = muteL;
 
-	// set audio out Stereo settings(extra gain, balanced)
+	/* set audio out Stereo settings(extra gain, balanced) */
 	if (dev->aud.iStereoGainL > 9)
 		dev->aud.iStereoGainL = 9;
 	if (dev->aud.iStereoGainR > 9)
@@ -3785,51 +3766,50 @@ static int SetAudioOut(struct s2226_dev *dev)
 	return 0;
 }
 
-// also sets line input balanced or not
+/* also sets line input balanced or not */
 static int SetAudioRoute(struct s2226_dev *dev, int route)
 {
-	if (route == -1) {
+	if (route == -1)
 		route = S2226_AUDIOROUTE_LINE1L;
-	}
 	dev->aud.iRoute = route;
 	if (!dev->input_set)
 		return -1;
 	dprintk(2, "audio route %d\n", route);
-	// MIC3L/R to Left ADC
+	/* MIC3L/R to Left ADC */
 	send_aic33_wr(dev, 17, 0xff);
-	// MIC3L/R to Right ADC
+	/* MIC3L/R to Right ADC */
 	send_aic33_wr(dev, 18, 0xff);
 	if (dev->is_decode) {
-		// ADC is powered down
+		/* ADC is powered down */
 		dprintk(0, "is_decode, turning AGC off\n");
-		send_aic33_wr(dev, 15, 0x80); //ADC PGA muted
-		send_aic33_wr(dev, 16, 0x80); //ADC PGA muted
-		send_aic33_wr(dev, 19, 0x78);//powered down
-		send_aic33_wr(dev, 20, 0x7c);//LINE2L to Left ADC (off)
-		send_aic33_wr(dev, 21, 0x78);//LINE1R to Left ADC (off)
-		send_aic33_wr(dev, 22, 0x78);//LINE1R to right ADC
-		send_aic33_wr(dev, 23, 0x7c);//LINE2R to right ADC (off)
-		send_aic33_wr(dev, 24, 0x78);//LINE1L to right ADC (off)
-	} else {	
+		send_aic33_wr(dev, 15, 0x80);/*ADC PGA muted*/
+		send_aic33_wr(dev, 16, 0x80);/*ADC PGA muted*/
+		send_aic33_wr(dev, 19, 0x78);/*powered down*/
+		send_aic33_wr(dev, 20, 0x7c);/*LINE2L to Left ADC (off)*/
+		send_aic33_wr(dev, 21, 0x78);/*LINE1R to Left ADC (off)*/
+		send_aic33_wr(dev, 22, 0x78);/*LINE1R to right ADC*/
+		send_aic33_wr(dev, 23, 0x7c);/*LINE2R to right ADC (off)*/
+		send_aic33_wr(dev, 24, 0x78);/*LINE1L to right ADC (off)*/
+	} else {
 		switch (route) {
 		case AUDIOROUTE_LINE1L:
 		case AUDIOROUTE_LINE1L_BYPASS:
 		default:
-			send_aic33_wr(dev, 19, dev->aud.in_balL ? 0x84 : 0x04); //LINE1L to Left ADC
-			send_aic33_wr(dev, 20, 0x7c);//LINE2L to Left ADC (off)
-			send_aic33_wr(dev, 21, 0x78);//LINE1R to Left ADC (off)
-			send_aic33_wr(dev, 22, dev->aud.in_balR ? 0x84 : 0x04); //LINE1R to right ADC
-			send_aic33_wr(dev, 23, 0x7c);//LINE2R to right ADC (off)
-			send_aic33_wr(dev, 24, 0x78);//LINE1L to right ADC (off)
+			send_aic33_wr(dev, 19, dev->aud.in_balL ? 0x84 : 0x04); /*LINE1L to Left ADC*/
+			send_aic33_wr(dev, 20, 0x7c);/*LINE2L to Left ADC (off)*/
+			send_aic33_wr(dev, 21, 0x78);/*LINE1R to Left ADC (off)*/
+			send_aic33_wr(dev, 22, dev->aud.in_balR ? 0x84 : 0x04); /*LINE1R to right ADC*/
+			send_aic33_wr(dev, 23, 0x7c);/*LINE2R to right ADC (off)*/
+			send_aic33_wr(dev, 24, 0x78);/*LINE1L to right ADC (off)*/
 			break;
 		case AUDIOROUTE_LINE2L:
 		case AUDIOROUTE_LINE2L_BYPASS:
-			send_aic33_wr(dev, 19, 0x7c);// LINE1L OFF (+ADC powered up)
-			send_aic33_wr(dev, 20, 0x84);//LINE2L to Left ADC (on, differential)
-			send_aic33_wr(dev, 21, 0x78);//LINE1R to Left ADC (off)
-			send_aic33_wr(dev, 22, 0x7c);// LINE1R OFF (+ADC powered up)
-			send_aic33_wr(dev, 23, 0x84);//LINE2R to right ADC (on, differential)
-			send_aic33_wr(dev, 24, 0x78);//LINE1L to right ADC (off)
+			send_aic33_wr(dev, 19, 0x7c);/* LINE1L OFF (+ADC powered up)*/
+			send_aic33_wr(dev, 20, 0x84);/*LINE2L to Left ADC (on, differential)*/
+			send_aic33_wr(dev, 21, 0x78);/*LINE1R to Left ADC (off)*/
+			send_aic33_wr(dev, 22, 0x7c);/* LINE1R OFF (+ADC powered up)*/
+			send_aic33_wr(dev, 23, 0x84);/*LINE2R to right ADC (on, differential)*/
+			send_aic33_wr(dev, 24, 0x78);/*LINE1L to right ADC (off)*/
 			break;
 		}
 	}
@@ -3837,158 +3817,158 @@ static int SetAudioRoute(struct s2226_dev *dev, int route)
 	switch (route) {
 	case AUDIOROUTE_LINE1L: /* LINE1L routed */
 	case AUDIOROUTE_LINE2L: /* LINE2L routed */
-		// to HPLOUT
-		send_aic33_wr(dev, 45, 0x00); //LINE2L
-		send_aic33_wr(dev, 46, 0x00); //PGA_L
-		send_aic33_wr(dev, 47, 0x80); //DAC_L1
-		send_aic33_wr(dev, 48, 0x00); //LINE2R
-		send_aic33_wr(dev, 49, 0x00); //PGA_R
-		send_aic33_wr(dev, 50, 0x00); //DAC_R1
-		// to HPLCOM
-		send_aic33_wr(dev, 52, 0x00); //LINE2L
-		send_aic33_wr(dev, 53, 0x00); //PGA_L
-		send_aic33_wr(dev, 54, 0x00); //DAC_L1
-		send_aic33_wr(dev, 55, 0x00); //LINE2R
-		send_aic33_wr(dev, 56, 0x00); //PGA_R
-		send_aic33_wr(dev, 57, 0x00); //DAC_R1
-		// to HPROUT
-		send_aic33_wr(dev, 59, 0x00); //LINE2L
-		send_aic33_wr(dev, 60, 0x00); //PGA_L
-		send_aic33_wr(dev, 61, 0x00); //DAC_L1
-		send_aic33_wr(dev, 62, 0x00); //LINE2R
-		send_aic33_wr(dev, 63, 0x00); //PGA_R
-		send_aic33_wr(dev, 64, 0x80); //DAC_R1
-		// to HPRCOM
-		send_aic33_wr(dev, 66, 0x00); //LINE2L
-		send_aic33_wr(dev, 67, 0x00); //PGA_L
-		send_aic33_wr(dev, 68, 0x00); //DAC_L1
-		send_aic33_wr(dev, 69, 0x00); //LINE2R
-		send_aic33_wr(dev, 70, 0x00); //PGA_R
-		send_aic33_wr(dev, 71, 0x00); //DAC_R1
-		// to mono settings
-		send_aic33_wr(dev, 73, 0x00); //LINE2L
-		send_aic33_wr(dev, 74, 0x00); //PGA_L
-		send_aic33_wr(dev, 75, 0x80); //DAC_L1
-		send_aic33_wr(dev, 76, 0x00); //LINE2R
-		send_aic33_wr(dev, 77, 0x00); //PGA_R
-		send_aic33_wr(dev, 78, 0x80); //DAC_R1
-		// to stereo left settings
-		send_aic33_wr(dev, 80, 0x00); //LINE2L
-		send_aic33_wr(dev, 81, 0x00); //PGA_L
-		send_aic33_wr(dev, 82, 0x80); //DAC_L1
-		send_aic33_wr(dev, 83, 0x00); //LINE2R
-		send_aic33_wr(dev, 84, 0x00); //PGA_R
-		send_aic33_wr(dev, 85, 0x00); //DAC_R1
-		// to stereo right
-		send_aic33_wr(dev, 87, 0x00); //LINE2L
-		send_aic33_wr(dev, 88, 0x00); //PGA_L
-		send_aic33_wr(dev, 89, 0x00); //DAC_L1
-		send_aic33_wr(dev, 90, 0x00); //LINE2R
-		send_aic33_wr(dev, 91, 0x00); //PGA_R
-		send_aic33_wr(dev, 92, 0x80); //DAC_R1
+		/* to HPLOUT*/
+		send_aic33_wr(dev, 45, 0x00); /*LINE2L*/
+		send_aic33_wr(dev, 46, 0x00); /*PGA_L*/
+		send_aic33_wr(dev, 47, 0x80); /*DAC_L1*/
+		send_aic33_wr(dev, 48, 0x00); /*LINE2R*/
+		send_aic33_wr(dev, 49, 0x00); /*PGA_R*/
+		send_aic33_wr(dev, 50, 0x00); /*DAC_R1*/
+		/* to HPLCOM*/
+		send_aic33_wr(dev, 52, 0x00); /*LINE2L*/
+		send_aic33_wr(dev, 53, 0x00); /*PGA_L*/
+		send_aic33_wr(dev, 54, 0x00); /*DAC_L1*/
+		send_aic33_wr(dev, 55, 0x00); /*LINE2R*/
+		send_aic33_wr(dev, 56, 0x00); /*PGA_R*/
+		send_aic33_wr(dev, 57, 0x00); /*DAC_R1*/
+		/* to HPROUT*/
+		send_aic33_wr(dev, 59, 0x00); /*LINE2L*/
+		send_aic33_wr(dev, 60, 0x00); /*PGA_L*/
+		send_aic33_wr(dev, 61, 0x00); /*DAC_L1*/
+		send_aic33_wr(dev, 62, 0x00); /*LINE2R*/
+		send_aic33_wr(dev, 63, 0x00); /*PGA_R*/
+		send_aic33_wr(dev, 64, 0x80); /*DAC_R1*/
+		/* to HPRCOM*/
+		send_aic33_wr(dev, 66, 0x00); /*LINE2L*/
+		send_aic33_wr(dev, 67, 0x00); /*PGA_L*/
+		send_aic33_wr(dev, 68, 0x00); /*DAC_L1*/
+		send_aic33_wr(dev, 69, 0x00); /*LINE2R*/
+		send_aic33_wr(dev, 70, 0x00); /*PGA_R*/
+		send_aic33_wr(dev, 71, 0x00); /*DAC_R1*/
+		/* to mono settings*/
+		send_aic33_wr(dev, 73, 0x00); /*LINE2L*/
+		send_aic33_wr(dev, 74, 0x00); /*PGA_L*/
+		send_aic33_wr(dev, 75, 0x80); /*DAC_L1*/
+		send_aic33_wr(dev, 76, 0x00); /*LINE2R*/
+		send_aic33_wr(dev, 77, 0x00); /*PGA_R*/
+		send_aic33_wr(dev, 78, 0x80); /*DAC_R1*/
+		/* to stereo left settings*/
+		send_aic33_wr(dev, 80, 0x00); /*LINE2L*/
+		send_aic33_wr(dev, 81, 0x00); /*PGA_L*/
+		send_aic33_wr(dev, 82, 0x80); /*DAC_L1*/
+		send_aic33_wr(dev, 83, 0x00); /*LINE2R*/
+		send_aic33_wr(dev, 84, 0x00); /*PGA_R*/
+		send_aic33_wr(dev, 85, 0x00); /*DAC_R1*/
+		/* to stereo right*/
+		send_aic33_wr(dev, 87, 0x00); /*LINE2L*/
+		send_aic33_wr(dev, 88, 0x00); /*PGA_L*/
+		send_aic33_wr(dev, 89, 0x00); /*DAC_L1*/
+		send_aic33_wr(dev, 90, 0x00); /*LINE2R*/
+		send_aic33_wr(dev, 91, 0x00); /*PGA_R*/
+		send_aic33_wr(dev, 92, 0x80); /*DAC_R1*/
 		break;
 	case AUDIOROUTE_LINE1L_BYPASS:
-		// to HPLOUT
-		send_aic33_wr(dev, 45, 0x00); //LINE2L
-		send_aic33_wr(dev, 46, 0x80); //PGA_L
-		send_aic33_wr(dev, 47, 0x00); //DAC_L1
-		send_aic33_wr(dev, 48, 0x00); //LINE2R
-		send_aic33_wr(dev, 49, 0x00); //PGA_R
-		send_aic33_wr(dev, 50, 0x00); //DAC_R1
-		// to HPLCOM
-		send_aic33_wr(dev, 52, 0x00); //LINE2L
-		send_aic33_wr(dev, 53, 0x00); //PGA_L
-		send_aic33_wr(dev, 54, 0x00); //DAC_L1
-		send_aic33_wr(dev, 55, 0x00); //LINE2R
-		send_aic33_wr(dev, 56, 0x00); //PGA_R
-		send_aic33_wr(dev, 57, 0x00); //DAC_R1
-		// to HPROUT
-		send_aic33_wr(dev, 59, 0x00); //LINE2L
-		send_aic33_wr(dev, 60, 0x00); //PGA_L
-		send_aic33_wr(dev, 61, 0x00); //DAC_L1
-		send_aic33_wr(dev, 62, 0x00); //LINE2R
-		send_aic33_wr(dev, 63, 0x80); //PGA_R
-		send_aic33_wr(dev, 64, 0x00); //DAC_R1
-		// to HPRCOM
-		send_aic33_wr(dev, 66, 0x00); //LINE2L
-		send_aic33_wr(dev, 67, 0x00); //PGA_L
-		send_aic33_wr(dev, 68, 0x00); //DAC_L1
-		send_aic33_wr(dev, 69, 0x00); //LINE2R
-		send_aic33_wr(dev, 70, 0x00); //PGA_R
-		send_aic33_wr(dev, 71, 0x00); //DAC_R1
-		// to mono settings
-		send_aic33_wr(dev, 73, 0x00); //LINE2L
-		send_aic33_wr(dev, 74, 0x80); //PGA_L
-		send_aic33_wr(dev, 75, 0x00); //DAC_L1
-		send_aic33_wr(dev, 76, 0x00); //LINE2R
-		send_aic33_wr(dev, 77, 0x80); //PGA_R
-		send_aic33_wr(dev, 78, 0x00); //DAC_R1
-		// to stereo left settings
-		send_aic33_wr(dev, 80, 0x00); //LINE2L
-		send_aic33_wr(dev, 81, 0x80); //PGA_L
-		send_aic33_wr(dev, 82, 0x00); //DAC_L1
-		send_aic33_wr(dev, 83, 0x00); //LINE2R
-		send_aic33_wr(dev, 84, 0x00); //PGA_R
-		send_aic33_wr(dev, 85, 0x00); //DAC_R1
-		// to stereo right
-		send_aic33_wr(dev, 86, 0x00); //LINE2L
-		send_aic33_wr(dev, 87, 0x00); //PGA_L
-		send_aic33_wr(dev, 88, 0x00); //DAC_L1
-		send_aic33_wr(dev, 89, 0x00); //LINE2R
-		send_aic33_wr(dev, 90, 0x80); //PGA_R
-		send_aic33_wr(dev, 91, 0x00); //DAC_R1
+		/* to HPLOUT*/
+		send_aic33_wr(dev, 45, 0x00); /*LINE2L*/
+		send_aic33_wr(dev, 46, 0x80); /*PGA_L*/
+		send_aic33_wr(dev, 47, 0x00); /*DAC_L1*/
+		send_aic33_wr(dev, 48, 0x00); /*LINE2R*/
+		send_aic33_wr(dev, 49, 0x00); /*PGA_R*/
+		send_aic33_wr(dev, 50, 0x00); /*DAC_R1*/
+		/* to HPLCOM*/
+		send_aic33_wr(dev, 52, 0x00); /*LINE2L*/
+		send_aic33_wr(dev, 53, 0x00); /*PGA_L*/
+		send_aic33_wr(dev, 54, 0x00); /*DAC_L1*/
+		send_aic33_wr(dev, 55, 0x00); /*LINE2R*/
+		send_aic33_wr(dev, 56, 0x00); /*PGA_R*/
+		send_aic33_wr(dev, 57, 0x00); /*DAC_R1*/
+		/* to HPROUT*/
+		send_aic33_wr(dev, 59, 0x00); /*LINE2L*/
+		send_aic33_wr(dev, 60, 0x00); /*PGA_L*/
+		send_aic33_wr(dev, 61, 0x00); /*DAC_L1*/
+		send_aic33_wr(dev, 62, 0x00); /*LINE2R*/
+		send_aic33_wr(dev, 63, 0x80); /*PGA_R*/
+		send_aic33_wr(dev, 64, 0x00); /*DAC_R1*/
+		/* to HPRCOM*/
+		send_aic33_wr(dev, 66, 0x00); /*LINE2L*/
+		send_aic33_wr(dev, 67, 0x00); /*PGA_L*/
+		send_aic33_wr(dev, 68, 0x00); /*DAC_L1*/
+		send_aic33_wr(dev, 69, 0x00); /*LINE2R*/
+		send_aic33_wr(dev, 70, 0x00); /*PGA_R*/
+		send_aic33_wr(dev, 71, 0x00); /*DAC_R1*/
+		/* to mono settings*/
+		send_aic33_wr(dev, 73, 0x00); /*LINE2L*/
+		send_aic33_wr(dev, 74, 0x80); /*PGA_L*/
+		send_aic33_wr(dev, 75, 0x00); /*DAC_L1*/
+		send_aic33_wr(dev, 76, 0x00); /*LINE2R*/
+		send_aic33_wr(dev, 77, 0x80); /*PGA_R*/
+		send_aic33_wr(dev, 78, 0x00); /*DAC_R1*/
+		/* to stereo left settings*/
+		send_aic33_wr(dev, 80, 0x00); /*LINE2L*/
+		send_aic33_wr(dev, 81, 0x80); /*PGA_L*/
+		send_aic33_wr(dev, 82, 0x00); /*DAC_L1*/
+		send_aic33_wr(dev, 83, 0x00); /*LINE2R*/
+		send_aic33_wr(dev, 84, 0x00); /*PGA_R*/
+		send_aic33_wr(dev, 85, 0x00); /*DAC_R1*/
+		/* to stereo right*/
+		send_aic33_wr(dev, 86, 0x00); /*LINE2L*/
+		send_aic33_wr(dev, 87, 0x00); /*PGA_L*/
+		send_aic33_wr(dev, 88, 0x00); /*DAC_L1*/
+		send_aic33_wr(dev, 89, 0x00); /*LINE2R*/
+		send_aic33_wr(dev, 90, 0x80); /*PGA_R*/
+		send_aic33_wr(dev, 91, 0x00); /*DAC_R1*/
 		dprintk(2, "bypass line 1\n");
 		break;
 	case AUDIOROUTE_LINE2L_BYPASS:
-		// to HPLOUT
-		send_aic33_wr(dev, 45, 0x80); //LINE2L
-		send_aic33_wr(dev, 46, 0x00); //PGA_L
-		send_aic33_wr(dev, 47, 0x00); //DAC_L1
-		send_aic33_wr(dev, 48, 0x00); //LINE2R
-		send_aic33_wr(dev, 49, 0x00); //PGA_R
-		send_aic33_wr(dev, 50, 0x00); //DAC_R1
-		// to HPLCOM
-		send_aic33_wr(dev, 52, 0x00); //LINE2L
-		send_aic33_wr(dev, 53, 0x00); //PGA_L
-		send_aic33_wr(dev, 54, 0x00); //DAC_L1
-		send_aic33_wr(dev, 55, 0x00); //LINE2R
-		send_aic33_wr(dev, 56, 0x00); //PGA_R
-		send_aic33_wr(dev, 57, 0x00); //DAC_R1
-		// to HPROUT
-		send_aic33_wr(dev, 59, 0x00); //LINE2L
-		send_aic33_wr(dev, 60, 0x00); //PGA_L
-		send_aic33_wr(dev, 61, 0x00); //DAC_L1
-		send_aic33_wr(dev, 62, 0x80); //LINE2R
-		send_aic33_wr(dev, 63, 0x00); //PGA_R
-		send_aic33_wr(dev, 64, 0x00); //DAC_R1
-		// to HPRCOM
-		send_aic33_wr(dev, 66, 0x00); //LINE2L
-		send_aic33_wr(dev, 67, 0x00); //PGA_L
-		send_aic33_wr(dev, 68, 0x00); //DAC_L1
-		send_aic33_wr(dev, 69, 0x00); //LINE2R
-		send_aic33_wr(dev, 70, 0x00); //PGA_R
-		send_aic33_wr(dev, 71, 0x00); //DAC_R1
-		// to mono settings
-		send_aic33_wr(dev, 73, 0x80); //LINE2L
-		send_aic33_wr(dev, 74, 0x00); //PGA_L
-		send_aic33_wr(dev, 75, 0x00); //DAC_L1
-		send_aic33_wr(dev, 76, 0x80); //LINE2R
-		send_aic33_wr(dev, 77, 0x00); //PGA_R
-		send_aic33_wr(dev, 78, 0x00); //DAC_R1
-		// to stereo left settings
-		send_aic33_wr(dev, 80, 0x80); //LINE2L
-		send_aic33_wr(dev, 81, 0x00); //PGA_L
-		send_aic33_wr(dev, 82, 0x00); //DAC_L1
-		send_aic33_wr(dev, 83, 0x00); //LINE2R
-		send_aic33_wr(dev, 84, 0x00); //PGA_R
-		send_aic33_wr(dev, 85, 0x00); //DAC_R1
-		// to stereo right
-		send_aic33_wr(dev, 80, 0x00); //LINE2L
-		send_aic33_wr(dev, 81, 0x00); //PGA_L
-		send_aic33_wr(dev, 82, 0x00); //DAC_L1
-		send_aic33_wr(dev, 83, 0x00); //LINE2R
-		send_aic33_wr(dev, 84, 0x80); //PGA_R
-		send_aic33_wr(dev, 85, 0x00); //DAC_R1
+		/* to HPLOUT*/
+		send_aic33_wr(dev, 45, 0x80); /*LINE2L*/
+		send_aic33_wr(dev, 46, 0x00); /*PGA_L*/
+		send_aic33_wr(dev, 47, 0x00); /*DAC_L1*/
+		send_aic33_wr(dev, 48, 0x00); /*LINE2R*/
+		send_aic33_wr(dev, 49, 0x00); /*PGA_R*/
+		send_aic33_wr(dev, 50, 0x00); /*DAC_R1*/
+		/* to HPLCOM*/
+		send_aic33_wr(dev, 52, 0x00); /*LINE2L*/
+		send_aic33_wr(dev, 53, 0x00); /*PGA_L*/
+		send_aic33_wr(dev, 54, 0x00); /*DAC_L1*/
+		send_aic33_wr(dev, 55, 0x00); /*LINE2R*/
+		send_aic33_wr(dev, 56, 0x00); /*PGA_R*/
+		send_aic33_wr(dev, 57, 0x00); /*DAC_R1*/
+		/* to HPROUT*/
+		send_aic33_wr(dev, 59, 0x00); /*LINE2L*/
+		send_aic33_wr(dev, 60, 0x00); /*PGA_L*/
+		send_aic33_wr(dev, 61, 0x00); /*DAC_L1*/
+		send_aic33_wr(dev, 62, 0x80); /*LINE2R*/
+		send_aic33_wr(dev, 63, 0x00); /*PGA_R*/
+		send_aic33_wr(dev, 64, 0x00); /*DAC_R1*/
+		/* to HPRCOM*/
+		send_aic33_wr(dev, 66, 0x00); /*LINE2L*/
+		send_aic33_wr(dev, 67, 0x00); /*PGA_L*/
+		send_aic33_wr(dev, 68, 0x00); /*DAC_L1*/
+		send_aic33_wr(dev, 69, 0x00); /*LINE2R*/
+		send_aic33_wr(dev, 70, 0x00); /*PGA_R*/
+		send_aic33_wr(dev, 71, 0x00); /*DAC_R1*/
+		/* to mono settings*/
+		send_aic33_wr(dev, 73, 0x80); /*LINE2L*/
+		send_aic33_wr(dev, 74, 0x00); /*PGA_L*/
+		send_aic33_wr(dev, 75, 0x00); /*DAC_L1*/
+		send_aic33_wr(dev, 76, 0x80); /*LINE2R*/
+		send_aic33_wr(dev, 77, 0x00); /*PGA_R*/
+		send_aic33_wr(dev, 78, 0x00); /*DAC_R1*/
+		/* to stereo left settings*/
+		send_aic33_wr(dev, 80, 0x80); /*LINE2L*/
+		send_aic33_wr(dev, 81, 0x00); /*PGA_L*/
+		send_aic33_wr(dev, 82, 0x00); /*DAC_L1*/
+		send_aic33_wr(dev, 83, 0x00); /*LINE2R*/
+		send_aic33_wr(dev, 84, 0x00); /*PGA_R*/
+		send_aic33_wr(dev, 85, 0x00); /*DAC_R1*/
+		/* to stereo right*/
+		send_aic33_wr(dev, 80, 0x00); /*LINE2L*/
+		send_aic33_wr(dev, 81, 0x00); /*PGA_L*/
+		send_aic33_wr(dev, 82, 0x00); /*DAC_L1*/
+		send_aic33_wr(dev, 83, 0x00); /*LINE2R*/
+		send_aic33_wr(dev, 84, 0x80); /*PGA_R*/
+		send_aic33_wr(dev, 85, 0x00); /*DAC_R1*/
 		break;
 	}
 	dev->aud.iRoute = route;
@@ -3997,30 +3977,23 @@ static int SetAudioRoute(struct s2226_dev *dev, int route)
 
 int s2226_get_fpga_ver(struct s2226_dev *dev)
 {
-	// get fpga firmware version
+	/* get fpga firmware version */
 	int fwver = 0;
 	int retval;
 	retval = get_reg(dev, DEVID_FPGA, (0x21 << 1), &fwver);
 	if (retval >= 0)
 		printk(KERN_INFO "s2226: board_id %d\n"
-		       "s2226: FPGA ver: 0x%04x\n", 
+		       "s2226: FPGA ver: 0x%04x\n",
 		       (fwver >> 11), (fwver & 0x07ff));
 	else {
 		printk(KERN_INFO "s2226: err FPGA ver %d\n", retval);
 		return -1;
 	}
-	
 	dev->fpga_ver = fwver & 0x07ff;
 	dev->board_id = fwver >> 11;
 	return 0;
 }
 
-
-
-
-/*
- *  begin V4L code
- */
 
 #ifdef CONFIG_S2226_V4L
 #define S2226_NORMS		(V4L2_STD_PAL | V4L2_STD_NTSC)
@@ -4028,7 +4001,7 @@ int s2226_get_fpga_ver(struct s2226_dev *dev)
 #if LINUX_VERSION_CODE < KERNEL_VERSION_V4L2_NEW_FOPS2
 static int s2226_open_v4l(struct inode *inode, struct file *file)
 #else
-	static int s2226_open_v4l(struct file *file)
+static int s2226_open_v4l(struct file *file)
 #endif
 {
 #if LINUX_VERSION_CODE < KERNEL_VERSION_V4L2_NEW_FOPS2
@@ -4042,15 +4015,14 @@ static int s2226_open_v4l(struct inode *inode, struct file *file)
 	dprintk(1, "%s\n", __func__);
 
 	if (s2226_mutex_lock_interruptible(&s2226_devices_lock)) {
-		printk("could not acquire lock s2226_open\n");
+		printk(KERN_INFO "could not acquire lock s2226_open\n");
 		return -ERESTARTSYS;
 	}
 
 	list_for_each(list, &s2226_devlist) {
 		h = list_entry(list, struct s2226_dev, s2226_devlist);
-		if (h->vdev->minor == minor) {
+		if (h->vdev->minor == minor)
 			dev = h;
-		}
 	}
 
 	if (NULL == dev) {
@@ -4059,18 +4031,18 @@ static int s2226_open_v4l(struct inode *inode, struct file *file)
 		return -ENODEV;
 	}
 
-	// allocate file context data
-	fh = kmalloc(sizeof(struct s2226_fh),GFP_KERNEL);
+	/* allocate file context data */
+	fh = kmalloc(sizeof(struct s2226_fh), GFP_KERNEL);
 	if (NULL == fh) {
 		s2226_mutex_unlock(&s2226_devices_lock);
 		return -ENOMEM;
 	}
-	memset(fh,0,sizeof(struct s2226_fh));
+	memset(fh, 0, sizeof(struct s2226_fh));
 	dprintk(1, "opened dev %p\n", dev);
 	file->private_data = fh;
-	fh->dev            = dev;
+	fh->dev = dev;
 	fh->type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-	// increment our usage count for the device 
+	/* increment our usage count for the device */
 	dev->users++;
 	kref_get(&dev->kref);
 	videobuf_queue_vmalloc_init(&fh->vb_vidq, &s2226_video_qops,
@@ -4101,15 +4073,15 @@ static int s2226_release_v4l(struct inode *inode, struct file *file)
 	if (!dev)
 		return -ENODEV;
 
-	if (s2226_mutex_lock_interruptible(&s2226_devices_lock)) {
+	if (s2226_mutex_lock_interruptible(&s2226_devices_lock))
 		return -ERESTARTSYS;
-	}
+
 	if (fh == NULL) {
 		s2226_mutex_unlock(&s2226_devices_lock);
 		return -ENODEV;
 	}
 	dev = fh->dev;
-	if (dev == NULL) { 
+	if (dev == NULL) {
 		s2226_mutex_unlock(&s2226_devices_lock);
 		return -ENODEV;
 	}
@@ -4137,7 +4109,7 @@ static int s2226_release_v4l(struct inode *inode, struct file *file)
 	videobuf_mmap_free(&fh->vb_vidq);
 	kfree(fh);
 	s2226_mutex_unlock(&s2226_devices_lock);
-	// decrement the count on our device
+	/* decrement the count on our device */
 	kref_put(&dev->kref, s2226_delete);
 	return 0;
 }
@@ -4264,7 +4236,7 @@ static struct v4l2_queryctrl s2226_qctrl[] = {
 	}
 };
 
-static int frame_count = 0;
+static int frame_count;
 
 static int s2226_got_data(struct s2226_dev *dev, int urb_idx)
 {
@@ -4298,7 +4270,7 @@ static int s2226_got_data(struct s2226_dev *dev, int urb_idx)
 	do_gettimeofday(&ts);
 	buf->vb.ts = ts;
 	frame_count++;
-	buf->vb.field_count+=2;
+	buf->vb.field_count += 2;
 	buf->vb.state = VIDEOBUF_DONE;
 	wake_up(&buf->vb.done);
 	dprintk(2, "wakeup [buf/i] [%p/%d]\n", buf, buf->vb.i);
@@ -4316,13 +4288,13 @@ static int buffer_setup(struct videobuf_queue *vq, unsigned int *count,
 			unsigned int *size)
 {
 	*size = S2226_BUFFER_SIZE;
-	
+
 	if (0 == *count)
 		*count = S2226_DEF_BUFS;
 
 	while (*size * (*count) > vid_limit * 1024 * 1024)
 		(*count)--;
-	
+
 	dprintk(4, "buffer setup %d\n", *count);
 	return 0;
 }
@@ -4338,7 +4310,6 @@ static void free_buffer(struct videobuf_queue *vq, struct s2226_buffer *buf)
 static int buffer_prepare(struct videobuf_queue *vq, struct videobuf_buffer *vb,
 			  enum v4l2_field field)
 {
-//	struct s2226_fh *fh = vq->priv_data;
 	struct s2226_buffer *buf = container_of(vb, struct s2226_buffer, vb);
 	int rc;
 	dprintk(4, "%s, field=%d\n", __func__, field);
@@ -4348,9 +4319,8 @@ static int buffer_prepare(struct videobuf_queue *vq, struct videobuf_buffer *vb,
 		return -EINVAL;
 	}
 
-//	buf->fmt = fh->fmt;
-	buf->vb.width = 720;//fh->width;
-	buf->vb.height = 480;//fh->height;
+	buf->vb.width = 720;/*fh->width;*/
+	buf->vb.height = 480;/*fh->height;*/
 	buf->vb.field = field;
 
 	if (VIDEOBUF_NEEDS_INIT == buf->vb.state) {
@@ -4371,7 +4341,7 @@ static void buffer_queue(struct videobuf_queue *vq, struct videobuf_buffer *vb)
 	struct s2226_buffer *buf = container_of(vb, struct s2226_buffer, vb);
 	struct s2226_fh *fh = vq->priv_data;
 	struct s2226_dev *dev = fh->dev;
-	struct s2226_dmaqueue *vidq = &dev->vidq;;
+	struct s2226_dmaqueue *vidq = &dev->vidq;
 	dprintk(4, "%s\n", __func__);
 	buf->vb.state = VIDEOBUF_QUEUED;
 	list_add_tail(&buf->vb.queue, &vidq->active);
@@ -4381,7 +4351,6 @@ static void buffer_release(struct videobuf_queue *vq,
 			   struct videobuf_buffer *vb)
 {
 	struct s2226_buffer *buf = container_of(vb, struct s2226_buffer, vb);
-//	struct s2226_fh *fh = vq->priv_data;
 	dprintk(4, "%s\n", __func__);
 	free_buffer(vq, buf);
 }
@@ -4394,13 +4363,12 @@ static struct videobuf_queue_ops s2226_video_qops = {
 };
 #endif
 
-// now part of standard driver
 static int res_get(struct s2226_dev *dev, struct s2226_fh *fh, int res)
 {
 	/* is it free? */
 	dprintk(4, "res get\n");
 	s2226_mutex_lock(&dev->reslock);
-	dprintk(2, "resources %x, res %x \n", dev->resources, res);
+	dprintk(2, "resources %x, res %x\n", dev->resources, res);
 	if (dev->resources & res) {
 		/* no, someone else uses it */
 		s2226_mutex_unlock(&dev->reslock);
@@ -4457,7 +4425,7 @@ static int vidioc_querycap(struct file *file, void *priv,
 		sizeof(cap->bus_info));
 #endif
 	usb_make_path(dev->udev, cap->bus_info, sizeof(cap->bus_info));
-	cap->version = 0;//TODO S2226_VERSION;
+	cap->version = 0;/*TODO S2226_VERSION;*/
 	cap->capabilities = V4L2_CAP_VIDEO_CAPTURE | V4L2_CAP_STREAMING;
 	return 0;
 }
@@ -4485,15 +4453,14 @@ static int vidioc_enum_fmt_vid_cap(struct file *file, void *priv,
 static int vidioc_g_fmt_vid_cap(struct file *file, void *priv,
 				struct v4l2_format *f)
 {
-//	struct s2226_fh *fh = priv;
 	f->type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-	f->fmt.pix.width = 720;//fh->height;
-	f->fmt.pix.height = 480;//fh->height;
+	f->fmt.pix.width = 720;/*fh->height;*/
+	f->fmt.pix.height = 480;/*fh->height;*/
 	f->fmt.pix.field = V4L2_FIELD_NONE;
 	f->fmt.pix.pixelformat = V4L2_PIX_FMT_MPEG;
 	f->fmt.pix.bytesperline = 0;
 	f->fmt.pix.sizeimage = S2226_BUFFER_SIZE;
-	f->fmt.pix.colorspace = 0;//V4L2_COLORSPACE_SMPTE170M ???
+	f->fmt.pix.colorspace = 0;/*V4L2_COLORSPACE_SMPTE170M ??? */
 	f->fmt.pix.priv = 0;
 	f->type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
 	dprintk(4, "%s", __func__);
@@ -4508,12 +4475,10 @@ static int vidioc_try_fmt_vid_cap(struct file *file, void *priv,
 	int is_ntsc;
 
 	is_ntsc = !dev->v4l_is_pal;
-	
 	dprintk(4, "%s\n", __func__);
 
 	if (f->fmt.pix.pixelformat != V4L2_PIX_FMT_MPEG)
 		return -EINVAL;
-
 	f->fmt.pix.pixelformat = V4L2_PIX_FMT_MPEG;
 	f->fmt.pix.field = V4L2_FIELD_NONE;
 	f->fmt.pix.bytesperline = 0;
@@ -4545,9 +4510,9 @@ static int vidioc_try_fmt_vid_cap(struct file *file, void *priv,
 	return 0;
 }
 
-// MPEG capture device so this really has no meaning.
-// There is no scalar.  accept format specified, but width and height 
-// of image will be fixed in the MPEG stream.
+/* MPEG capture device so this really has no meaning.
+   There is no scalar.  accept format specified, but width and height
+   of image will be fixed in the MPEG stream. */
 static int vidioc_s_fmt_vid_cap(struct file *file, void *priv,
 				struct v4l2_format *f)
 {
@@ -4557,7 +4522,7 @@ static int vidioc_s_fmt_vid_cap(struct file *file, void *priv,
 //	struct videobuf_queue *q = &fh->vb_vidq;
 //#endif
 	int ret;
-	printk("set fmt\n");
+	printk(KERN_INFO "set fmt\n");
 	ret = vidioc_try_fmt_vid_cap(file, fh, f);
 
 	if (ret < 0)
@@ -4640,15 +4605,13 @@ static int vidioc_streamon(struct file *file, void *priv, enum v4l2_buf_type i)
 		printk(KERN_ERR "stream busy\n");
 		return -EBUSY;
 	}
-
-
 	res = videobuf_streamon(&fh->vb_vidq);
 	if (res == 0) {
 		s2226_set_attr(dev, ATTR_INPUT, dev->cur_input);
-        if (dev->fpga_ver <= 0) {
-            s2226_get_fpga_ver(dev);
-            s2226_new_v4l_input(dev, dev->v4l_input);
-        }
+		if (dev->fpga_ver <= 0) {
+			s2226_get_fpga_ver(dev);
+			s2226_new_v4l_input(dev, dev->v4l_input);
+		}
 		s2226_start_encode(dev, 0, S2226_CONTEXT_V4L);
 	} else {
 		res_free(dev, fh, RES_STREAM);
@@ -4800,8 +4763,7 @@ static int vidioc_s_std(struct file *file, void *priv, v4l2_std_id *i)
 #else
 		dev->current_norm = V4L2_STD_NTSC;
 #endif
-	} 
-
+	}
 	if (*i & V4L2_STD_PAL) {
 		switch (dev->v4l_input) {
 		case S2226_INPUT_SDI_1080I_5994:
@@ -4824,10 +4786,9 @@ static int vidioc_s_std(struct file *file, void *priv, v4l2_std_id *i)
 #endif
 	}
 	dev->v4l_is_pal = (*i & V4L2_STD_PAL) ? 1 : 0;
-
-	// change input based on new standard
+	/* change input based on new standard */
 	ret = s2226_new_v4l_input(dev, dev->v4l_input);
-	printk("%s %d\n",__func__, ret);
+	printk(KERN_INFO "%s %d\n", __func__, ret);
 	return ret;
 }
 
@@ -4836,7 +4797,6 @@ static int vidioc_enum_input(struct file *file, void *priv,
 {
 	if (inp->index >= S2226_INPUT_MAX)
 		return -EINVAL;
-	
 	inp->type = V4L2_INPUT_TYPE_CAMERA;
 	inp->std = S2226_NORMS;
 	inp->status = 0;
@@ -4906,8 +4866,7 @@ static int vidioc_enum_input(struct file *file, void *priv,
 		inp->std = V4L2_STD_PAL;
 		break;
 	}
-	//inp->status =  (status & 0x01) ? 0
-	//: V4L2_IN_ST_NO_SIGNAL;
+	/*inp->status =  (status & 0x01) ? 0 : V4L2_IN_ST_NO_SIGNAL; */
 	return 0;
 }
 
@@ -4999,7 +4958,7 @@ static int vidioc_s_audio(struct file *file, void *priv,
 static int mpeg_queryctrl(u32 id, struct v4l2_queryctrl *ctrl)
 {
 	int i;
-	// must be in increasing order
+	/* must be in increasing order */
 	static const u32 mpeg_ctrls[] = {
 		V4L2_CID_MPEG_CLASS,
 		V4L2_CID_MPEG_STREAM_TYPE,
@@ -5029,8 +4988,8 @@ static int mpeg_queryctrl(u32 id, struct v4l2_queryctrl *ctrl)
 
 	for (i = 0; i < ARRAY_SIZE(s2226_qctrl); i++)
 		if (ctrl->id && ctrl->id == s2226_qctrl[i].id) {
-			// don't just copy.  use query fill to set the V4L name
-			// correctly based on kernel function
+			/* don't just copy.  use query fill to set the V4L name
+			   correctly based on kernel function */
 			v4l2_ctrl_query_fill(ctrl,
 					     s2226_qctrl[i].minimum,
 					     s2226_qctrl[i].maximum,
@@ -5138,8 +5097,8 @@ static int vidioc_s_ctrl(struct file *file, void *priv,
 	int i;
 	struct s2226_fh *fh = file->private_data;
 	struct s2226_dev *dev = fh->dev;
-	printk("set ctrl %d %d\n", ctrl->id, V4L2_CID_MPEG_VIDEO_BITRATE);
-	// verify range
+	printk(KERN_INFO "set ctrl %d %d\n", ctrl->id, V4L2_CID_MPEG_VIDEO_BITRATE);
+	/* verify range */
 	for (i = 0; i < ARRAY_SIZE(s2226_qctrl); i++) {
 		if (ctrl->id == s2226_qctrl[i].id) {
 			if (ctrl->value < s2226_qctrl[i].minimum ||
@@ -5223,9 +5182,9 @@ static int s2226_mmap_v4l(struct file *file, struct vm_area_struct *vma)
 		return -ENODEV;
 	dprintk(4, "mmap called, vma=0x%08lx\n", (unsigned long)vma);
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 11, 0)
-	// workaround deadlock bug introduced in 3.11 (in videobuf)
-	//https://www.mail-archive.com/linux-media@vger.kernel.org/msg68345.html
-	//Note: we will migrate to videobuf2 soon.
+	/* workaround deadlock bug introduced in 3.11 (in videobuf)
+	   https://www.mail-archive.com/linux-media@vger.kernel.org/msg68345.html
+	   Note: we will migrate to videobuf2 soon. */
 	mutex_lock(&q->vb_lock);
 	q->ext_lock = (struct mutex *) 1;
 #endif
@@ -5235,7 +5194,6 @@ static int s2226_mmap_v4l(struct file *file, struct vm_area_struct *vma)
 	q->ext_lock = NULL;
 	mutex_unlock(&q->vb_lock);
 #endif
-
 	dprintk(4, "vma start=0x%08lx, size=%ld, ret=%d\n",
 		(unsigned long)vma->vm_start,
 		(unsigned long)vma->vm_end - (unsigned long)vma->vm_start, ret);
@@ -5420,15 +5378,12 @@ static int s2226_probe_v4l(struct s2226_dev *dev)
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 11, 0)
 	dev->current_norm = V4L2_STD_NTSC_M;
 #endif
-	
 	if (ret != 0) {
 		dev_err(&dev->udev->dev,
 			"failed to register video device!\n");
 		return ret;
 	}
-
-	printk(KERN_INFO "Sensoray 2226 V4L driver \n"); //todo add revision
-
+	printk(KERN_INFO "Sensoray 2226 V4L driver\n"); /*todo add revision*/
 	return ret;
 #else
 	// no V4L, return, but initialize resources lock
@@ -5467,30 +5422,21 @@ static void s2226_exit_v4l(struct s2226_dev *dev)
 #endif
 }
 
-
-
-
-/*
- * End V4L code
- */
-
-
-    
-module_init (usb_s2226_init);
-module_exit (usb_s2226_exit);
+module_init(usb_s2226_init);
+module_exit(usb_s2226_exit);
 
 MODULE_DESCRIPTION("Sensoray 2226 Linux driver: Version 1.03(Copyright 2008-2012)");
 MODULE_LICENSE("GPL");
 
 
 
-// AIC33 sanity checking
+/* AIC33 sanity checking */
 static int s2226_aic33_check(u8 page, u8 reg, u8 val)
 {
 	int rc = 0;
 	if (page == 1) {
 		dprintk(2, "%s page 1\n", __func__);
-		return 0; // no checking for page 1 yet
+		return 0; /* no checking for page 1 yet */
 	}
 	switch (reg) {
 	default:
@@ -5546,12 +5492,12 @@ static int s2226_aic33_check(u8 page, u8 reg, u8 val)
 	case 14:
 		if (val & 0x07)
 			rc = -EINVAL;
-		// do not set bits D3 and D6 high at same time
+		/* do not set bits D3 and D6 high at same time */
 		if ((val & 0x08) && (val & 0x20))
 			rc = -EINVAL;
 		break;
 	case 21:
-		if ((((val >> 3) & 0x0f) >= 9) && 
+		if ((((val >> 3) & 0x0f) >= 9) &&
 		    (((val >> 3) & 0x0f) < 15))
 			rc = -EINVAL;
 		if (val & 0x07)
@@ -5559,31 +5505,31 @@ static int s2226_aic33_check(u8 page, u8 reg, u8 val)
 		break;
 	case 17:
 	case 18:
-		if ((((val >> 4) & 0x0f) >= 9) && 
+		if ((((val >> 4) & 0x0f) >= 9) &&
 		    (((val >> 4) & 0x0f) < 15))
 			rc = -EINVAL;
-		if ( ((val & 0x0f) >= 9) && 
-		     ((val & 0x0f) < 15) )
+		if (((val & 0x0f) >= 9) &&
+		     ((val & 0x0f) < 15))
 			rc = -EINVAL;
 		break;
 	case 19:
 	case 20:
 	case 22:
-		if ((((val >> 3) & 0x0f) >= 9) && 
+		if ((((val >> 3) & 0x0f) >= 9) &&
 		    (((val >> 3) & 0x0f) < 15))
 			rc = -EINVAL;
 		break;
 	case 23:
 		if (val & 0x03)
 			rc = -EINVAL;
-		if ((((val >> 3) & 0x0f) >= 9) && 
+		if ((((val >> 3) & 0x0f) >= 9) &&
 		    (((val >> 3) & 0x0f) < 15))
 			rc = -EINVAL;
 		break;
 	case 24:
 		if (val & 0x07)
 			rc = -EINVAL;
-		if ((((val >> 3) & 0x0f) >= 9) && 
+		if ((((val >> 3) & 0x0f) >= 9) &&
 		    (((val >> 3) & 0x0f) < 15))
 			rc = -EINVAL;
 		break;
@@ -5611,20 +5557,20 @@ static int s2226_aic33_check(u8 page, u8 reg, u8 val)
 		break;
 	case 86:
 	case 79:
-		if ((val >> 4) >= 0x0a) // D7-D4 (1010-1111 reserved)
+		if ((val >> 4) >= 0x0a) /* D7-D4 (1010-1111 reserved) */
 			rc = -EINVAL;
-		//fall thru
+		/*fall thru */
 	case 93:
-		if (val & 0x04) // write only zero to D2
+		if (val & 0x04) /* write only zero to D2 */
 			rc = -EINVAL;
 		break;
 	case 100:
-		if (((val >> 2) & 0x03) == 0x03) // DO not write 11 to D3-D2
+		if (((val >> 2) & 0x03) == 0x03) /* DO not write 11 to D3-D2 */
 			rc = -EINVAL;
 		break;
 
 	}
 	if (rc != 0)
-		printk("%s: invalid write [page %d] register %d of val 0x%x\n", __func__, page, reg, val);
+		printk(KERN_INFO "%s: invalid write [page %d] register %d of val 0x%x\n", __func__, page, reg, val);
 	return rc;
 }
