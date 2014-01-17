@@ -35,7 +35,8 @@ extern unsigned int h51IPRM[h51IPRMregs][2];
 extern unsigned int h51IPRV[h51IPRVregs][2];
 extern unsigned int h51IPRA[h51IPRAregs][2];
 
-
+int setH51regs (struct MODE2226 *mode);
+void loadH51rb(H51_RB_SIZE *rb_size);
 
 #endif		//__s2226mode_H									
 
