@@ -2267,6 +2267,7 @@ long s2226_ioctl(struct file *file,
 	case S2226_VIDIOC_STARTDECODE:
 	{
 		start_param_t cmd;
+
 		dprintk(1, "start decode\n");
 		if (strm->type != S2226_STREAM_DECODE) {
 			printk(KERN_INFO "S2226_VIDIOC_STARTDECODE invalid handle\n");
@@ -4897,7 +4898,6 @@ static int vidioc_s_input(struct file *file, void *priv, unsigned int i)
 {
 	struct s2226_stream *strm = video_drvdata(file);
 	struct s2226_dev *dev = strm->dev;
-	struct s2226_fh *fh = priv;
 	int rc;
 
 	dprintk(2, "%s: %d type %d\n", __func__, i, strm->type);
@@ -4906,31 +4906,13 @@ static int vidioc_s_input(struct file *file, void *priv, unsigned int i)
 		return -EINVAL;
 	}
 	/* we don't set the input if any device streams are running */
-	if (vb2_is_streaming(&dev->m->vb_vidq)) {
-		/* If the input is same as existing, we don't need
-		   to reset it.  We don't do this in all cases
-		   because we may want to physically reset the input
-		   on the device if it is not streaming.
-		*/
+	if (s2226_anystream_busy(dev)) {
 		if (i == dev->v4l_input && !dev->is_decode)
 			return 0;
 		dprintk(2, "eBUSY m\n");
 		return -EBUSY;
 	}
-	if (vb2_is_streaming(&dev->p->vb_vidq)) {
-		/* if input is same as existing, don't need
-		   to reset it */
-		if (i == dev->v4l_input && !dev->is_decode)
-			return 0;
-		dprintk(2, "eBUSY p\n");
-		return -EBUSY;
-	}
-	if (res_locked(fh->dev, fh) & RES_DECODE) {
-		dprintk(1, "stream busy, can't set input, decoding\n");
-		return -EBUSY;
-	}
-
-	dprintk(0, "new v4l input %d\n", i);
+	dprintk(2, "new v4l input %d\n", i);
 	if (strm->type == S2226_STREAM_DECODE)
 		rc = s2226_new_v4l_input_decode(dev, i);
 	else
