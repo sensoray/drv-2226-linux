@@ -227,7 +227,7 @@ static int SetAudioRightAGC(struct s2226_dev *dev, int bOn, int gain);
 static int SetAudioLeftAGC(struct s2226_dev *dev, int bOn, int gain);
 static int SetAudioBalR(struct s2226_dev *dev, int bBal);
 static int SetAudioBalL(struct s2226_dev *dev, int bBal);
-
+static int s2226_set_audiomux_mpegin(struct s2226_dev *dev, int aud);
 #define S2226_STREAM_MPEG 0 /* MPEG H.264 in MPEG-TS container */
 
 /* 2226 raw preview video stream. downscaled for USB2.0 */
@@ -2268,6 +2268,7 @@ static int s2226_new_input(struct s2226_dev *dev, int input)
 		SetAudioIn(dev);
 		SetAudioRoute(dev, dev->aud.iRoute);
 		SetAudioOut(dev);
+		(void) s2226_set_audiomux_mpegin(dev, dev->cur_audiompeg);
 	}
 	dprintk(2, "%s: input %d rc %d\n", __func__, input, rc);
 	return rc;
@@ -2275,7 +2276,7 @@ static int s2226_new_input(struct s2226_dev *dev, int input)
 
 #define S2226_REG_AUD_INPK_CTL  (0x015<<1)
 
-int s2226_set_audiomux_mpegin(struct s2226_dev *dev, int aud)
+static int s2226_set_audiomux_mpegin(struct s2226_dev *dev, int aud)
 {
 	int reg;
 	int rc;
@@ -3294,7 +3295,7 @@ static int s2226_probe(struct usb_interface *interface,
 	dev->h51_mode.vbr = 0;
 	dev->h51_mode.vBitrate = S2226_DEF_VBITRATE;
 	dev->h51_mode.aBitrate = S2226_DEF_ABITRATE;
-	dev->h51_mode.aMode =  AMODE_MP1L2;
+	dev->h51_mode.aMode = AMODE_MP1L2;
 	dev->closed_gop = 0;
 	dev->dpb_size = -1;
 	dev->gop_struct = -1;
