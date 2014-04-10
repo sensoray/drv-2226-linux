@@ -72,10 +72,15 @@ struct level_param {
 
 
 // ========End Audio Settings=============
-
-
 // 2226 error codes (see INTRESULT_xyz error codes in types2226.h
 #define S2226_ERR_BASE               (-132)
+
+
+// ========End Audio Settings=============
+
+/*
+
+
 
 #define S2226_IOC_LAST_IOCTL    0x105c // update when updating anything below
                                        // not sequential
@@ -104,7 +109,6 @@ struct level_param {
 // No support provided.  For debug, board bringup,
 // and development only.
 //=============================================================
-#define S2226_IOC_GET_STATUS    0x1006
 #define S2226_IOC_SDII_WR       0x1010 // low level(for debug, bringup)
 #define S2226_IOC_SDII_RD       0x1012 // low level(for debug, bringup)
 #define S2226_IOC_SDIO_WR       0x1014 // low level(for debug, bringup)
@@ -173,6 +177,8 @@ struct level_param {
 #define S2226_IOC_VIDDEC_RD      0x105a
 #define S2226_IOC_SDISPLIT_RD      0x105c // videncoder is write only
 
+*/
+
 typedef struct {
     int addr;
     int value;
@@ -211,6 +217,92 @@ typedef struct {
 
 
 
+
+// new V4L ioctl
+#define S2226_VIDIOC_LOCK_OVERLAY  (BASE_VIDIOC_PRIVATE + 0)
+#define S2226_VIDIOC_UNLOCK_OVERLAY (BASE_VIDIOC_PRIVATE + 1)
+#define S2226_VIDIOC_SET_MODE      (BASE_VIDIOC_PRIVATE + 2)
+#define S2226_VIDIOC_STARTENCODE   (BASE_VIDIOC_PRIVATE + 3)
+#define S2226_VIDIOC_STOPENCODE    (BASE_VIDIOC_PRIVATE + 4)
+#define S2226_VIDIOC_GET_MODE      (BASE_VIDIOC_PRIVATE + 5)
+#define S2226_VIDIOC_STARTDECODE   (BASE_VIDIOC_PRIVATE + 6)
+#define S2226_VIDIOC_STOPDECODE    (BASE_VIDIOC_PRIVATE + 7)
+#define S2226_VIDIOC_SET_INPUT     (BASE_VIDIOC_PRIVATE + 8)
+#define S2226_VIDIOC_GET_INPUT     (BASE_VIDIOC_PRIVATE + 9)
+#define S2226_VIDIOC_SET_LEVEL     (BASE_VIDIOC_PRIVATE + 10)
+#define S2226_VIDIOC_GET_LEVEL     (BASE_VIDIOC_PRIVATE + 11)
+// returns 1 if decoding, 0 otherwise
+#define S2226_VIDIOC_DECODE_STATE  (BASE_VIDIOC_PRIVATE + 12)
+#define S2226_VIDIOC_FX2_VER       (BASE_VIDIOC_PRIVATE + 13)
+
+//=============================================================
+// internal ioctls (debug, etc...)
+// No support provided.  For debug, board bringup,
+// and development only.
+//=============================================================
+#define S2226_VIDIOC_GET_STATUS    (BASE_VIDIOC_PRIVATE + 14)
+#define S2226_VIDIOC_SDII_WR       (BASE_VIDIOC_PRIVATE + 15)
+#define S2226_VIDIOC_SDII_RD       (BASE_VIDIOC_PRIVATE + 16)
+#define S2226_VIDIOC_SDIO_WR       (BASE_VIDIOC_PRIVATE + 17)
+#define S2226_VIDIOC_SDIO_RD       (BASE_VIDIOC_PRIVATE + 18)
+#define S2226_VIDIOC_FPGA_WR       (BASE_VIDIOC_PRIVATE + 19)
+#define S2226_VIDIOC_FPGA_WR_BURST (BASE_VIDIOC_PRIVATE + 20)
+#define S2226_VIDIOC_FPGA_WR_BURST_FAST (BASE_VIDIOC_PRIVATE + 21)
+#define S2226_VIDIOC_FPGA_WR_ADDRDATA (BASE_VIDIOC_PRIVATE + 22)
+
+#define S2226_VIDIOC_FPGA_RD       (BASE_VIDIOC_PRIVATE + 23)
+#define S2226_VIDIOC_FPGA_RD_BURST (BASE_VIDIOC_PRIVATE + 24)
+#define S2226_VIDIOC_BOOT_H51      (BASE_VIDIOC_PRIVATE + 25)
+#define S2226_VIDIOC_BOOT_FPGA     (BASE_VIDIOC_PRIVATE + 26)
+#define S2226_VIDIOC_AUDIO_WR      (BASE_VIDIOC_PRIVATE + 27)
+#define S2226_VIDIOC_AUDIO_RD      (BASE_VIDIOC_PRIVATE + 28)
+#define S2226_VIDIOC_H51_WR        (BASE_VIDIOC_PRIVATE + 29)
+#define S2226_VIDIOC_H51_RD        (BASE_VIDIOC_PRIVATE + 30)
+#define S2226_VIDIOC_SET_ATTR      (BASE_VIDIOC_PRIVATE + 31)
+#define S2226_VIDIOC_GET_ATTR      (BASE_VIDIOC_PRIVATE + 32)
+#define S2226_VIDIOC_RESET_BOARD   (BASE_VIDIOC_PRIVATE + 33) //resets the ARM, which in turn will
+                                       //reset the FPGA and H51 and 
+                                       // other devices(except USB FX2 chip)
+#define S2226_VIDIOC_FLASH_WR      (BASE_VIDIOC_PRIVATE + 34) //internal use only, voids warranty
+                                       //if misused
+#define S2226_VIDIOC_FLASH_ERASE   (BASE_VIDIOC_PRIVATE + 35) //internal use only, voids warranty
+#define S2226_VIDIOC_I2C_TX        (BASE_VIDIOC_PRIVATE + 36) //internal use only
+#define S2226_VIDIOC_FLASH_RD      (BASE_VIDIOC_PRIVATE + 37) //internal use only
+#define S2226_VIDIOC_ARM_VER       (BASE_VIDIOC_PRIVATE + 38) //internal use only
+
+// call before S2226_VIDIOC_RESET_CPU to load initial failsafe firmware
+// This is only used if the firmware update was corrupted
+// or cancelled early
+#define S2226_VIDIOC_FX2SAM_LO     (BASE_VIDIOC_PRIVATE + 39) //internal use only
+// same as above, but refactored.  loads base firmware after reset
+#define S2226_VIDIOC_SET_BASEFW    (BASE_VIDIOC_PRIVATE + 40) //internal use only
+
+#define S2226_VIDIOC_NOP           (BASE_VIDIOC_PRIVATE + 41) //internal use only
+
+// default state.  If FX2SAM hi, ARM will look for secondary(newest) firmware
+// Normally, this command does not need to be used.  Only for firmware
+// updating.
+#define S2226_VIDIOC_FX2SAM_HI     (BASE_VIDIOC_PRIVATE + 42) //internal use only
+// same as above, but refactored.  loads latest firmware after reset
+#define S2226_VIDIOC_SET_NEWFW     (BASE_VIDIOC_PRIVATE + 43)
+
+#define S2226_VIDIOC_RESET_USB     (BASE_VIDIOC_PRIVATE + 44) //internal use only
+#define S2226_VIDIOC_PRIME_FX2     (BASE_VIDIOC_PRIVATE + 45) //internal use only
+#define S2226_VIDIOC_DEFAULT_PARAMS (BASE_VIDIOC_PRIVATE + 46) //internal use only
+#define S2226_VIDIOC_DPB_SIZE	(BASE_VIDIOC_PRIVATE + 47) //internal use only
+
+
+#define S2226_VIDIOC_GOP_STRUCT    (BASE_VIDIOC_PRIVATE + 48) //internal use only
+// Warning: Using non-standard values is not supported.
+// Recommended GOP struct is used by default without using this IOCTL
+// GOP_STRUCT -1 default value. use recommended settings
+// GOP_STRUCT 0 (override default, use IBBP) 
+// GOP_STRUCT 1 (override default, use IP)
+// GOP_STRUCT 3 (override default, use IBP) 
+#define S2226_VIDIOC_AINOFFSET      (BASE_VIDIOC_PRIVATE + 49)  // internal use only
+#define S2226_VIDIOC_AV_RESYNC      (BASE_VIDIOC_PRIVATE + 50) // (threshold) internal use only
+#define S2226_VIDIOC_VIDDEC_RD      (BASE_VIDIOC_PRIVATE + 51)
+#define S2226_VIDIOC_SDISPLIT_RD    (BASE_VIDIOC_PRIVATE + 52)// videncoder is write only
 
 
 #endif //_S2226IOCTL_H

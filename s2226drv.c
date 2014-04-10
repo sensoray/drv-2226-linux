@@ -32,23 +32,30 @@
 #include <linux/highmem.h>
 #include <linux/kthread.h>
 #include <linux/poll.h>
+#include <media/videobuf2-core.h>
+#include <media/videobuf2-vmalloc.h>
 #include <linux/videodev2.h>
 #include <media/v4l2-dev.h>
 #include <media/v4l2-device.h>
 #include <media/v4l2-common.h>
-#include <media/videobuf-vmalloc.h>
 #include <media/v4l2-ioctl.h>
 
+#include <media/v4l2-dev.h>
+#include <media/v4l2-device.h>
 
 /* update with each new version for easy detection of driver */
-/* version on embedded products (2420 for instance) */
-#define S2226_DRIVER_VERSION_STRING "V1.0.8: 03/18/2011"
+#define S2226_VERSION "1.0.9"
+
 
 #include "s2226mod.h"
 #include "s2226ioctl.h"
 #include "h51reg.h"
 #include "h51reg_dec.h"
 #include "dh2226.h"
+#define S2226_MPEG_URB_SIZE 8192
+#define S2226_PREVIEW_URB_SIZE (16*1024)
+#define WR_URBS		  4
+#define RD_URBS		  4
 
 #define S2226_SETINPUT_TO 20000
 #define S2226_FLASHERASE_TO 60000
@@ -70,7 +77,6 @@
 #define USB_S2226_VENDOR_ID   0x1943
 #define USB_S2226_PRODUCT_ID  0x2226
 
-#define MAX_ENDPOINTS 4
 #define INDEX_EP_H264 0    /* video in, video out.  endpoint index */
 #define INDEX_EP_CONTROL 1 /* control messages */
 #define INDEX_EP_RESP    2 /* responses */
@@ -83,6 +89,24 @@
 #define s2226_mutex_lock_interruptible mutex_lock_interruptible
 #define s2226_mutex_unlock   mutex_unlock
 
+/*
+ * USB interrupt message types. All intmsg's have one of these types.
+ */
+#define INTTYPE_CMDREPLY 1 /* Response to usb host command. */
+#define INTTYPE_ASYNCEVENT 2 /* asynchronous event notification. */
+
+/* Types of async events found in interrupt messages. */
+#define ASYNCEVENT_VSYNC 1 /* VSYNC detected. */
+#define ASYNCEVENT_H51_MSG 2 /* H51 issued an unsolicited message. */
+#define ASYNCEVENT_SYSERROR 3 /* H51 internal error. */
+#define ASYNCEVENT_RAWDATA 4
+#define ASYNCEVENT_RAWDATA_END 5
+#define ASYNCEVENT_SNAPSHOT_START 6
+#define ASYNCEVENT_SNAPSHOT_END 7
+
+/* default preview scales */
+#define S2226_DEF_PREVIEW_X 320
+#define S2226_DEF_PREVIEW_Y 240
 
 /* table of devices that work with this driver */
 static struct usb_device_id s2226_table[] = {
@@ -101,8 +125,6 @@ int *s2226_filter_mode = &filter_mode;
 
 
 static int majorv = 126;
-static LIST_HEAD(s2226_devlist);
-static unsigned int vid_limit = 16;	/* Video memory limit, in Mb */
 static int video_nr = -1;	/* /dev/videoN, -1 for autodetect */
 
 
@@ -132,8 +154,6 @@ MODULE_PARM_DESC(mfgmode, "Mfg mode (0-off default) internal use.  do not change
 
 module_param(majorv, int, 0);
 MODULE_PARM_DESC(majorv, "major for video devname");
-module_param(vid_limit, int, 0644);
-MODULE_PARM_DESC(vid_limit, "video memory limit(Mb)");
 module_param(video_nr, int, 0644);
 MODULE_PARM_DESC(video_nr, "start video minor(-1 default autodetect)");
 
@@ -146,35 +166,17 @@ MODULE_PARM_DESC(video_nr, "start video minor(-1 default autodetect)");
 	} while (0)
 
 
-#define to_s2226_dev(d) container_of(d, struct s2226_dev, kref)
 
 
 static struct usb_driver s2226_driver;
-static struct mutex  s2226_devices_lock;
 
 
 #define MAX_CHANNELS 5
 
-/*  ring buffer: */
-#define S2226_RB_PKT_SIZE 4096
-#define WR_URBS		  8
-#define RD_URBS		  8
-
-struct s2226_urb {
-	struct s2226_dev *dev;
-	struct urb *urb;
-	int ready;
-	int context;
-	void *buffer;
-};
 
 struct s2226_dev;
 
-struct s2226_dmaqueue {
-	struct list_head active;
-	struct s2226_dev *dev;
-};
-
+static void s2226_read_preview_callback(struct urb *u);
 #define AUDIOROUTE_LINE1L S2226_AUDIOROUTE_LINE1L
 #define AUDIOROUTE_LINE2L S2226_AUDIOROUTE_LINE2L
 #define AUDIOROUTE_LINE1L_BYPASS S2226_AUDIOROUTE_LINE1L_BYPASS
@@ -188,6 +190,129 @@ static int SetAudioRightAGC(struct s2226_dev *dev, int bOn, int gain);
 static int SetAudioLeftAGC(struct s2226_dev *dev, int bOn, int gain);
 static int SetAudioBalR(struct s2226_dev *dev, int bBal);
 static int SetAudioBalL(struct s2226_dev *dev, int bBal);
+
+#define S2226_STREAM_MPEG 0 /* MPEG H.264 in MPEG-TS container */
+
+/* 2226 raw preview video stream. downscaled for USB2.0 */
+#define S2226_STREAM_PREVIEW 1
+
+/* decode stream.  may not be used at same time as mpeg stream */
+#define S2226_STREAM_DECODE 2
+
+struct s2226_dev;
+
+/* inputs for MPEG encoding and preview */
+#define    S2226_INPUT_COMPOSITE_0     0
+#define    S2226_INPUT_SVIDEO_0        1
+#define    S2226_INPUT_COMPOSITE_1     2
+#define    S2226_INPUT_SVIDEO_1        3
+#define    S2226_INPUT_SD_COLORBARS    4
+#define    S2226_INPUT_720P_COLORBARS  5
+#define    S2226_INPUT_1080I_COLORBARS 6
+#define    S2226_INPUT_SDI_SD          7
+#define    S2226_INPUT_SDI_720P_5994   8
+#define    S2226_INPUT_SDI_720P_60     9
+#define    S2226_INPUT_SDI_1080I_50    10
+#define    S2226_INPUT_SDI_1080I_5994  11
+#define    S2226_INPUT_SDI_1080I_60    12
+#define    S2226_INPUT_SDI_720P_50     13
+#define    S2226_INPUT_SDI_720P_24     14
+#define    S2226_INPUT_SDI_720P_2398   15
+#define    S2226_INPUT_SDI_1080P_24    16
+#define    S2226_INPUT_SDI_1080P_2398  17
+#define    S2226_INPUT_MAX             18
+
+/* inputs for MPEG decode */
+#define S2226_DECODE_480I       0
+#define S2226_DECODE_576I       1
+#define S2226_DECODE_1080I_60   2
+#define S2226_DECODE_1080I_5994 3
+#define S2226_DECODE_1080I_50   4
+#define S2226_DECODE_720P_60    5
+#define S2226_DECODE_720P_5994  6
+#define S2226_DECODE_720P_50    7
+#define S2226_DECODE_720P_24    8
+#define S2226_DECODE_720P_2398  9
+#define S2226_DECODE_1080P_24   10
+#define S2226_DECODE_1080P_2398 11
+#define S2226_DECODE_MAX        12
+
+/* MPEG audio source */
+#define    S2226_AUDIOINPUT_LINE       0
+#define    S2226_AUDIOINPUT_TONE       1 /* test tone */
+#define    S2226_AUDIOINPUT_SDI        2 /* SDI-IN embedded audio */
+#define    S2226_AUDIOINPUT_MAX        3
+
+/* maximum size of URB buffers */
+#define MAX_USB_SIZE (16*1024)
+#define MAX_USB_INT_SIZE 512 /* interrupt endpoint */
+
+#define S2226_MPEG_BUFFER_SIZE (S2226_MPEG_URB_SIZE)
+#define S2226_MIN_BUFS    10
+
+#define S2226_MIN_BUFS_PR 3 /* minimum number of preview bufs */
+
+/* buffer for one video frame */
+struct s2226_buffer {
+	/* common v4l buffer stuff -- must be first */
+	struct vb2_buffer vb;
+	struct list_head list;
+};
+
+struct s2226_fh {
+	struct s2226_dev *dev;
+	struct s2226_stream *strm;
+	unsigned int resources;	/* resource management for device open */
+	int type;
+	int is_mpeg;
+};
+
+
+
+
+struct s2226_dev;
+struct s2226_urb {
+	struct s2226_dev *dev;
+	struct s2226_stream *strm;
+	struct urb *urb;
+	int ready;
+	int context;
+	void *buffer;
+};
+
+struct s2226_dmaqueue {
+	struct list_head active;
+	struct s2226_dev *dev;
+};
+
+/* 2226 stream */
+struct s2226_stream {
+	int type;
+	int active;
+	int height;
+	int fourcc;
+	int width;
+	struct video_device vdev;
+	struct s2226_urb write_vid[WR_URBS];
+	struct s2226_urb read_vid[RD_URBS];
+	int			write_vid_ready;
+	wait_queue_head_t       write_vid_wq;
+	struct s2226_dev *dev;
+	int m_sync; /* for raw video */
+	int m_height;
+	int m_width;
+	int m_padding;
+	int m_lines;
+	int m_pos;
+	int m_copied;
+	int framecount;
+	spinlock_t qlock;
+	struct vb2_queue vb_vidq;
+	struct vb2_queue *queue; /* pointer to vb_vidq */
+	struct list_head buf_list;
+	struct mutex vb_lock;
+};
+
 struct s2226_audio {
 	int bAGC_R; /* if AGC on or off*/
 	int bAGC_L; /* if AGC on or off*/
@@ -218,29 +343,32 @@ struct s2226_audio {
 	int iRoute;
 };
 
+
+#define S2226_MAX_STREAMS 3
+#define MAX_ENDPOINTS 4
+
 /* 2226 device */
 struct s2226_dev {
+	struct s2226_stream strm[S2226_MAX_STREAMS];
+	struct s2226_stream *m; /* shortcut to strm[S2226_STREAM_MPEG] encode */
+	struct s2226_stream *p; /* shortcut to strm[S2226_STREAM_PREVIEW] */
+	struct s2226_stream *d; /* shortcut to strm[S2226_STREAM_DECODE] */
+	struct v4l2_device v4l2_dev;
 	int			users;
 	int			debug;
 	struct mutex ioctl_lock;
 	struct mutex            audlock;
+	struct mutex            reslock;
 	struct usb_device	*udev;
 	struct usb_interface	*interface;
-	struct kref		kref;
 	int			h51_state;
 	int			persona;
 	void			*interrupt_buffer;
 	void			*control_buffer;
 	struct urb		*interrupt_urb;
 	struct urb		*control_urb;
-	struct s2226_urb	write_vid[WR_URBS];
-	struct s2226_urb	read_vid[RD_URBS];
-	int			read_vid_head;
-	int			write_vid_ready;
 	int			interrupt_ready;
 	int			control_ready;
-	wait_queue_head_t       read_vid_wq;
-	wait_queue_head_t       write_vid_wq;
 	struct MODE2226		h51_mode;
 	int			cur_input;
 	int                     cur_audiompeg; /* current audio input */
@@ -263,108 +391,152 @@ struct s2226_dev {
 	int                     saturation;
 	int                     contrast;
 	int			resources;
-	struct mutex            reslock; /* resource lock(V4L) */
+	int ovl_res;
+	struct file *ovl_in_use_by;
+	struct mutex            lock;
 	int                     v4l_is_pal; /* is PAL standard */
 	int                     v4l_input;
 	spinlock_t		slock;
-	struct video_device     *vdev;
-	struct v4l2_device      v4l2_dev;
-	struct s2226_dmaqueue   vidq;
-	struct list_head        s2226_devlist;
 	v4l2_std_id		current_norm;
 	struct s2226_audio      aud;
 	int h51_reload_required;
 	int usb_ver;
 	int ep[MAX_ENDPOINTS]; /* endpoint address */
 	int audio_page;
+	int cfg_intf;
+	int alt_intf;
 };
 
-
-#define    S2226_INPUT_COMPOSITE_0     0
-#define    S2226_INPUT_SVIDEO_0        1
-#define    S2226_INPUT_COMPOSITE_1     2
-#define    S2226_INPUT_SVIDEO_1        3
-#define    S2226_INPUT_SD_COLORBARS    4
-#define    S2226_INPUT_720P_COLORBARS  5
-#define    S2226_INPUT_1080I_COLORBARS 6
-#define    S2226_INPUT_SDI_SD          7
-#define    S2226_INPUT_SDI_720P_5994   8
-#define    S2226_INPUT_SDI_720P_60     9
-#define    S2226_INPUT_SDI_1080I_50    10
-#define    S2226_INPUT_SDI_1080I_5994  11
-#define    S2226_INPUT_SDI_1080I_60    12
-#define    S2226_INPUT_SDI_720P_50     13
-#define    S2226_INPUT_SDI_720P_24     14
-#define    S2226_INPUT_SDI_720P_2398   15
-#define    S2226_INPUT_SDI_1080P_24    16
-#define    S2226_INPUT_SDI_1080P_2398  17
-#define    S2226_INPUT_MAX             18
-
-/* MPEG audio source */
-#define    S2226_AUDIOINPUT_LINE       0
-#define    S2226_AUDIOINPUT_TONE       1 /* test tone */
-#define    S2226_AUDIOINPUT_SDI        2 /* SDI-IN embedded audio */
-#define    S2226_AUDIOINPUT_MAX        3
-
-/* maximum size of URB buffers */
-#define MAX_USB_SIZE (16*1024)
-#define MAX_USB_INT_SIZE 512	/* interrupt */
-
-
-#define S2226_BUFFER_SIZE (S2226_RB_PKT_SIZE)
-#define S2226_DEF_BUFS    10
-
-/* buffer for one video frame */
-struct s2226_buffer {
-	/* common v4l buffer stuff -- must be first */
-	struct videobuf_buffer vb;
-};
-
-
-struct s2226_fh {
-	struct s2226_dev	*dev;
-	unsigned int resources;	/* resource management for device open */
-	int type;
-	struct videobuf_queue	vb_vidq;
-};
 
 /* function prototypes (forwards)*/
-#define RES_STREAM  1
-#define RES_OVERLAY 2
-#define RES_ALL  (RES_STREAM | RES_OVERLAY)
-static int res_get(struct s2226_dev *dev, struct s2226_fh *fh, int res);
-static void res_free(struct s2226_dev *dev, struct s2226_fh *fh, int res);
-static int res_check(struct s2226_fh *fh);
-static int res_locked(struct s2226_dev *dev, struct s2226_fh *fh);
+#define RES_ENCODE  1
+#define RES_PREVIEW 2
+#define RES_DECODE  4
+#define RES_STREAM (RES_ENCODE | RES_PREVIEW | RES_DECODE)
+#define RES_ALL  (RES_STREAM)
+
+static int s2226_new_v4l_input(struct s2226_dev *dev, int inp);
+static int s2226_new_v4l_input_decode(struct s2226_dev *dev, int inp);
 static int write_control_endpoint(struct s2226_dev *dev, int timeout);
 static int read_interrupt_endpoint(struct s2226_dev *dev, int timeout);
 static int s2226_get_attr(struct s2226_dev *dev, int attr, int *value);
+extern int setH51regs(struct MODE2226 *mode);
 static void s2226_read_vid_callback(struct urb *u);
 static int s2226_vendor_request(void *pdev, unsigned char req,
-				unsigned short idx, unsigned short val,
-				void *pbuf, unsigned int len,
-				int bOut);
+			 unsigned short idx, unsigned short val,
+			 void *pbuf, unsigned int len,
+			 int bOut);
 static int send_sdi_write(struct s2226_dev *dev, unsigned char addr,
 			  unsigned char val, int bIn);
 static int send_persona_run(struct s2226_dev *dev, unsigned char persona);
-static int send_persona_halt(struct s2226_dev *dev);
+static int send_persona_halt(struct s2226_dev *dev, unsigned char index, unsigned int fw);
 static int s2226_flush_in_ep(struct s2226_dev *dev);
-static int s2226_set_interface(struct s2226_dev *dev, int cfg, int alt);
+static int s2226_set_interface(struct s2226_dev *dev, int cfg, int alt, int force);
 
-/* for controlling which firmware is loaded.  see comments for
-   S2226_IOC_SET_BASEFW and S2226_IOC_SET_NEWFW in ioctl file. */
+/*
+ * for controlling which firmware is loaded.  see comments for
+ * S2226_IOC_SET_BASEFW and S2226_IOC_SET_NEWFW in ioctl file.
+ */
 static int s2226_fx2sam(struct s2226_dev *dev, int bNewFw);
 
-/* resets the ARM CPU to bring up all board devices(h51, FPGA, ARM)
-   except the FX2 usb chip in a fresh state */
-
+/*
+ * resets the ARM CPU to bring up all board devices(h51, FPGA, ARM)
+ * except the FX2 usb chip in a fresh state
+ */
 static int s2226_reset_board(struct s2226_dev *dev);
 
 static int s2226_default_params(struct s2226_dev *dev);
 static int s2226_probe_v4l(struct s2226_dev *dev);
-static void s2226_exit_v4l(struct s2226_dev *dev);
-static int s2226_got_data(struct s2226_dev *dev, int urb_idx);
-static struct videobuf_queue_ops s2226_video_qops;
+static int s2226_got_data(struct s2226_stream *strm, unsigned char *buf, unsigned int len);
+static int s2226_got_preview_data(struct s2226_stream *strm, unsigned char *buf, unsigned int len);
+
+static struct vb2_ops s2226_vb2_ops;
+
+static int s2226_allocate_urbs(struct s2226_stream *strm);
+
+static int ovl_get(struct s2226_dev *dev, struct file *file)
+{
+	/* is it free? */
+	dprintk(4, "res get\n");
+	s2226_mutex_lock(&dev->reslock);
+	if (dev->ovl_res) {
+		/* no, someone else uses it */
+		s2226_mutex_unlock(&dev->reslock);
+		return 0;
+	}
+	/* it's free, grab it */
+	dev->ovl_res |= 1;
+	dev->ovl_in_use_by = file;
+	s2226_mutex_unlock(&dev->reslock);
+	return 1;
+}
+
+static void ovl_free(struct s2226_dev *dev)
+{
+	dprintk(4, "res free\n");
+	s2226_mutex_lock(&dev->reslock);
+	dev->ovl_res = 0;
+	dev->ovl_in_use_by = NULL;
+	s2226_mutex_unlock(&dev->reslock);
+	dprintk(4, "res: put\n");
+}
+
+static int ovl_check(struct s2226_dev *dev, struct file *filep)
+{
+	s2226_mutex_lock(&dev->reslock);
+	if (!(dev->ovl_res)) {
+		s2226_mutex_unlock(&dev->reslock);
+		return 0;
+	}
+	if (dev->ovl_in_use_by == filep) {
+		s2226_mutex_unlock(&dev->reslock);
+		return 1;
+	}
+	s2226_mutex_unlock(&dev->reslock);
+	return 0;
+}
+
+static int res_get(struct s2226_dev *dev, struct s2226_fh *fh, int res)
+{
+	/* is it free? */
+	dprintk(4, "res get\n");
+	s2226_mutex_lock(&dev->reslock);
+	dprintk(2, "resources %x, res %x\n", dev->resources, res);
+	if (dev->resources & res) {
+		/* no, someone else uses it */
+		s2226_mutex_unlock(&dev->reslock);
+		return 0;
+	}
+	/* it's free, grab it */
+	dev->resources |= res;
+	fh->resources |= res;
+	dprintk(1, "s2226: res: get\n");
+	s2226_mutex_unlock(&dev->reslock);
+	return 1;
+}
+
+static int res_locked(struct s2226_dev *dev, struct s2226_fh *fh)
+{
+	dprintk(4, "res locked\n");
+	return dev->resources;
+}
+
+static int res_check(struct s2226_fh *fh)
+{
+	dprintk(4, "res check %d\n", fh->resources);
+	return fh->resources;
+}
+
+
+static void res_free(struct s2226_dev *dev, struct s2226_fh *fh, int res)
+{
+	dprintk(4, "res free\n");
+	s2226_mutex_lock(&dev->reslock);
+	dev->resources &= ~res;
+	fh->resources &= ~res;
+	s2226_mutex_unlock(&dev->reslock);
+	dprintk(4, "res: put\n");
+}
 
 static unsigned char compute_checksum(unsigned char *pdata, int len)
 {
@@ -880,7 +1052,7 @@ static int send_h51_boot(struct s2226_dev *dev)
 	s2226_mutex_unlock(&dev->cmdlock);
 	return rc;
 }
-
+#if 0
 static int send_fpga_boot(struct s2226_dev *dev)
 {
 	int i = 0;
@@ -907,8 +1079,8 @@ static int send_fpga_boot(struct s2226_dev *dev)
 	s2226_mutex_unlock(&dev->cmdlock);
 	return rc;
 }
+#endif
 
-static int s2226_aic33_check(u8 page, u8 reg, u8 val);
 static int send_aic33_wr(struct s2226_dev *dev, unsigned char addr,
 			 unsigned char val)
 {
@@ -916,13 +1088,9 @@ static int send_aic33_wr(struct s2226_dev *dev, unsigned char addr,
 	unsigned char *buf = dev->control_buffer;
 	int rc;
 	unsigned char id;
+
 	if (addr == 0)
 		dev->audio_page = val & 1;
-	/* currently for debug. */
-	rc = s2226_aic33_check(dev->audio_page, addr, val);
-
-	if (rc != 0)
-		dev_warn(&dev->udev->dev, "%s: invalid AIC33\n", __func__);
 	s2226_mutex_lock(&dev->cmdlock);
 	id = dev->id++;
 	fill_cmd_buf(buf, i, HOSTCMD_REGWRITE, id);
@@ -1143,7 +1311,8 @@ static int send_persona_run(struct s2226_dev *dev, unsigned char persona_id)
 	return rc;
 }
 
-static int send_persona_halt(struct s2226_dev *dev)
+static int send_persona_halt(struct s2226_dev *dev, unsigned char index,
+			     unsigned int fw)
 {
 	int i = 0;
 	int rc;
@@ -1152,6 +1321,11 @@ static int send_persona_halt(struct s2226_dev *dev)
 	s2226_mutex_lock(&dev->cmdlock);
 	id = dev->id++;
 	fill_cmd_buf(buf, i, HOSTCMD_PERSONA_HALT, id);
+	dprintk(1, "%s fw %x\n", __func__, fw);
+	if (fw > 0x43) {
+		buf[i++] = index;
+		buf[i++] = 0;
+	}
 	buf[0] = (unsigned char) i;
 	buf[i++] = compute_checksum(buf, buf[0]);
 	rc = s2226_send_msg(dev, S2226_BULKMSG_TO);
@@ -1173,18 +1347,41 @@ static int s2226_start_rb_urbs(struct s2226_dev *dev, int context)
 {
 	int i;
 	int rc;
-	dev->read_vid_head = 0;
 	for (i = 0; i < RD_URBS; i++) {
-		usb_fill_bulk_urb(dev->read_vid[i].urb, dev->udev,
+		usb_fill_bulk_urb(dev->m->read_vid[i].urb, dev->udev,
 				  usb_rcvbulkpipe(dev->udev,
 						  dev->ep[INDEX_EP_H264]),
-				  (void *) dev->read_vid[i].buffer,
-				  S2226_RB_PKT_SIZE,
+				  (void *) dev->m->read_vid[i].buffer,
+				  S2226_MPEG_URB_SIZE,
 				  s2226_read_vid_callback,
-				  &dev->read_vid[i]);
-		dev->read_vid[i].ready = 0;
-		dev->read_vid[i].context = context;
-		rc = usb_submit_urb(dev->read_vid[i].urb, GFP_KERNEL);
+				  &dev->m->read_vid[i]);
+		dev->m->read_vid[i].ready = 0;
+		dev->m->read_vid[i].context = context;
+		rc = usb_submit_urb(dev->m->read_vid[i].urb, GFP_KERNEL);
+		if (rc != 0) {
+			dprintk(0, "%s: submit urb failed %d\n", __func__, rc);
+			return rc;
+		}
+	}
+	return 0;
+}
+
+static int s2226_start_preview_urbs(struct s2226_dev *dev, int context)
+{
+	int i;
+	int rc;
+	dev->p->m_sync = 1;
+	dprintk(2, "start preview urbs\n");
+	for (i = 0; i < RD_URBS; i++) {
+		usb_fill_bulk_urb(dev->p->read_vid[i].urb, dev->udev,
+				  usb_rcvbulkpipe(dev->udev, dev->ep[INDEX_EP_RAW]),
+				  (void *) dev->p->read_vid[i].buffer,
+				  S2226_PREVIEW_URB_SIZE,
+				  s2226_read_preview_callback,
+				  &dev->p->read_vid[i]);
+		dev->p->read_vid[i].ready = 0;
+		dev->p->read_vid[i].context = context;
+		rc = usb_submit_urb(dev->p->read_vid[i].urb, GFP_KERNEL);
 		if (rc != 0) {
 			dprintk(0, "%s: submit urb failed %d\n", __func__, rc);
 			return rc;
@@ -1197,8 +1394,6 @@ static int s2226_start_encode(struct s2226_dev *dev, int idx, int context)
 {
 	int i, bank;
 	int rc;
-	struct usb_host_interface *iface_desc;
-	struct usb_endpoint_descriptor *endpoint;
 	if (!dev->udev)
 		return -ENODEV;
 	dprintk(1, "cur_input=%d\n", dev->cur_input);
@@ -1207,26 +1402,14 @@ static int s2226_start_encode(struct s2226_dev *dev, int idx, int context)
 	dprintk(1, "vBitrate=%d\n", dev->h51_mode.vBitrate);
 	dprintk(1, "aBitrate=%d\n", dev->h51_mode.aBitrate);
 	dprintk(1, "aMode=%d\n", dev->h51_mode.aMode);
-
-
 	/* 1) Change to alternate configuration */
-	iface_desc = dev->interface->cur_altsetting;
-	s2226_set_interface(dev, 0, 1);
+	/*lliface_desc = dev->interface->cur_altsetting;*/
+	s2226_set_interface(dev, 0, 1, 0);
 	if (dev->h51_reload_required) {
 		send_h51_boot(dev);
 		dev->h51_reload_required = 0;
+		dprintk(2, "s2226: chipset reloaded\n");
 	}
-	iface_desc = dev->interface->cur_altsetting;
-	for (i = 0; i < iface_desc->desc.bNumEndpoints; ++i) {
-		endpoint = &iface_desc->endpoint[i].desc;
-		dprintk(1, "endpoint %d is %s %s\n",
-			endpoint->bEndpointAddress & 7,
-			((endpoint->bmAttributes & USB_ENDPOINT_XFERTYPE_MASK)
-			 == USB_ENDPOINT_XFER_BULK) ? "bulk" : "other",
-			((endpoint->bEndpointAddress & USB_ENDPOINT_DIR_MASK)
-			 == USB_DIR_IN) ? "in" : "out");
-	}
-
 	setH51regs(&dev->h51_mode);
 	for (bank = 0; bank < 4; bank++) {
 		int numregs = 0;
@@ -1299,8 +1482,7 @@ static int s2226_start_encode(struct s2226_dev *dev, int idx, int context)
 					if (dev->ainoffset > AINOFFSET_MAX) {
 						dev->ainoffset = AINOFFSET_MAX;
 						dev_info(&dev->udev->dev,
-							 "clamping ainoffset"
-							 " to max value");
+							 "clamping ainoffset");
 					}
 					value = dev->ainoffset;
 				}
@@ -1313,7 +1495,7 @@ static int s2226_start_encode(struct s2226_dev *dev, int idx, int context)
 		}
 	}
 	/* 3) Send Halt to config persona: */
-	rc = send_persona_halt(dev);
+	rc = send_persona_halt(dev, 0, dev->arm_ver);
 	if (rc < 0) {
 		dprintk(1,  "%s persona_halt %d\n", __func__, rc);
 		return rc;
@@ -1327,9 +1509,9 @@ static int s2226_start_encode(struct s2226_dev *dev, int idx, int context)
 		dprintk(1,  "%s persona_run %d\n", __func__, rc);
 		return rc;
 	}
+
 	dev->persona = PERSONA_ENCODE;
 	s2226_flush_in_ep(dev);
-
 	/* start the read pipe */
 	s2226_start_rb_urbs(dev, context);
 
@@ -1340,6 +1522,7 @@ static int s2226_start_encode(struct s2226_dev *dev, int idx, int context)
 		return rc;
 	}
 	dev->h51_state = STREAM_MODE_ENCODE;
+	dprintk(2, "start encode\n");
 	return 0;
 }
 
@@ -1347,11 +1530,11 @@ int s2226_stop_encode(struct s2226_dev *dev, int idx)
 {
 	int rc;
 	int streaid = 0;
+
 	rc = send_h51_setmode(dev, streaid, STREAM_MODE_IDLE);
 	if (rc < 0)
 		return rc;
-
-	rc = send_persona_halt(dev);
+	rc = send_persona_halt(dev, 0, dev->arm_ver);
 	if (rc < 0)
 		return rc;
 	dev->persona = PERSONA_DEFAULT;
@@ -1359,37 +1542,74 @@ int s2226_stop_encode(struct s2226_dev *dev, int idx)
 	return 0;
 }
 
+static int s2226_start_preview_urbs(struct s2226_dev *dev, int context);
+
+static int s2226_start_preview(struct s2226_dev *dev, int idx, int context)
+{
+	int rc;
+	if (!dev->udev)
+		return -ENODEV;
+	/* send halt */
+	rc = send_persona_halt(dev, 1, dev->arm_ver);
+	if (rc != 0) {
+		/* retry */
+		rc = send_persona_halt(dev, 1, dev->arm_ver);
+	}
+	if (rc < 0) {
+		dprintk(0, "%s persona_halt %d\n", __func__, rc);
+		return rc;
+	}
+	/* dev->persona = PERSONA_DEFAULT; */
+	/* start the preview read pipe */
+	s2226_start_preview_urbs(dev, context);
+	dprintk(2, "raw preview started!\n");
+	rc = send_persona_run(dev, 3); /*PERSONA_RAWVID);*/
+	dprintk(2, "send persona run %d\n", rc);
+	if (rc < 0) {
+		dprintk(1, "%s persona_run %d\n", __func__, rc);
+		return rc;
+	}
+	return 0;
+}
+
+int s2226_stop_preview(struct s2226_dev *dev, int idx)
+{
+	int rc;
+	rc = send_persona_halt(dev, 3, dev->arm_ver);
+	rc = send_persona_halt(dev, 1, dev->arm_ver);
+	if (rc < 0) {
+		dprintk(3, "stop preview failed %d, retrying\n", rc);
+		rc = send_persona_halt(dev, 1, dev->arm_ver);
+		if (rc < 0) {
+			dprintk(3, "stop preview failed %d, retrying\n", rc);
+			rc = send_persona_halt(dev, 1, dev->arm_ver);
+		}
+		return rc;
+	}
+	if (rc != 0)
+		dprintk(3, "halt failed\n");
+	return rc;
+}
+
+
 int s2226_start_decode(struct s2226_dev *dev, int idx)
 {
 	int i;
 	int rc;
 	int numregs;
-	struct usb_host_interface *iface_desc;
-	struct usb_endpoint_descriptor *endpoint;
+
 	if (!dev->udev)
 		return -ENODEV;
 
-	dprintk(1, "vFormat=%d\n", dev->h51_mode.vFormat);
+	dprintk(1, "%s vFormat=%d\n", __func__, dev->h51_mode.vFormat);
 	dprintk(1, "vBitrate=%d\n", dev->h51_mode.vBitrate);
 	dprintk(1, "aBitrate=%d\n", dev->h51_mode.aBitrate);
 	dprintk(1, "aMode=%d\n", dev->h51_mode.aMode);
-
 	/* 1) Change to alternate configuration */
-	iface_desc = dev->interface->cur_altsetting;
-	s2226_set_interface(dev, 0, 0);
-	iface_desc = dev->interface->cur_altsetting;
+	s2226_set_interface(dev, 0, 0, 0);
 	if (dev->h51_reload_required) {
 		send_h51_boot(dev);
 		dev->h51_reload_required = 0;
-	}
-	for (i = 0; i < iface_desc->desc.bNumEndpoints; ++i) {
-		endpoint = &iface_desc->endpoint[i].desc;
-		dprintk(1, "endpoint %d is %s %s\n",
-			endpoint->bEndpointAddress & 7,
-			((endpoint->bmAttributes & USB_ENDPOINT_XFERTYPE_MASK)
-			 == USB_ENDPOINT_XFER_BULK) ? "bulk" : "other",
-			((endpoint->bEndpointAddress & USB_ENDPOINT_DIR_MASK)
-			 == USB_DIR_IN) ? "in" : "out");
 	}
 	numregs = sizeof(G_h51reg_dec) / (2*sizeof(u32));
 	/* 2) send h51 registers */
@@ -1517,7 +1737,7 @@ int s2226_start_decode(struct s2226_dev *dev, int idx)
 		}
 	}
 	/* 3) Send Halt to config persona: */
-	rc = send_persona_halt(dev);
+	rc = send_persona_halt(dev, 0, dev->arm_ver);
 	if (rc < 0) {
 		dprintk(0, "%s persona_halt %d\n", __func__, rc);
 		return rc;
@@ -1544,10 +1764,11 @@ int s2226_start_decode(struct s2226_dev *dev, int idx)
 int s2226_stop_decode(struct s2226_dev *dev, int idx)
 {
 	int rc;
+
 	rc = send_h51_setmode(dev, 0, STREAM_MODE_IDLE);
 	if (rc < 0)
 		return rc;
-	rc = send_persona_halt(dev);
+	rc = send_persona_halt(dev, 0, dev->arm_ver);
 	if (rc < 0)
 		return rc;
 	dev->persona = PERSONA_DEFAULT;
@@ -1577,6 +1798,7 @@ int s2226_is_decode_input(int value)
 int s2226_set_h51_master(struct s2226_dev *dev, int bMaster)
 {
 	int ret;
+
 	ret = s2226_set_attr(dev, ATTR_AUDH51_MASTER, bMaster);
 	dprintk(0, "setting H51 audio INTF to %s, rc: %d\n",
 		bMaster ? "MASTER" : "SLAVE", ret);
@@ -1590,6 +1812,8 @@ static int s2226_set_attr(struct s2226_dev *dev, int attr, int value)
 	unsigned char id;
 	int i = 0;
 	int timeout = S2226_BULKMSG_TO;
+
+	dprintk(2, "set attr %d %x\n", attr, value);
 	s2226_mutex_lock(&dev->cmdlock);
 	id = dev->id++;
 	fill_cmd_buf(buf, i, HOSTCMD_ATTR_WRITE, id);
@@ -1597,8 +1821,8 @@ static int s2226_set_attr(struct s2226_dev *dev, int attr, int value)
 	fill_cmd_buf_val32(buf, i, value);
 	buf[0] = i;
 	buf[i++] = compute_checksum(buf, buf[0]);
-
 	if (attr == ATTR_INPUT) {
+		dprintk(1, "setting the input\n");
 		timeout = S2226_SETINPUT_TO;
 		dev->h51_reload_required  = 0;
 	}
@@ -1632,6 +1856,7 @@ static int s2226_get_attr_ext(struct s2226_dev *dev, int attr, int *value,
 	int rc;
 	unsigned char id;
 	int i = 0;
+
 	s2226_mutex_lock(&dev->cmdlock);
 	id = dev->id++;
 	fill_cmd_buf(buf, i, HOSTCMD_ATTR_READ, id);
@@ -1674,6 +1899,7 @@ static int s2226_send_nop(struct s2226_dev *dev, int bResp)
 {
 	int rlen;
 	int rc = 0;
+
 	s2226_mutex_lock(&dev->cmdlock);
 	form_h51_nop(dev->control_buffer, dev->id++);
 	if (bResp)
@@ -1752,24 +1978,29 @@ static int s2226_prime_fx2(struct s2226_dev *dev)
 }
 
 
-static int s2226_set_interface(struct s2226_dev *dev, int cfg, int alt)
+static int s2226_set_interface(struct s2226_dev *dev, int cfg, int alt, int force)
 {
 	int rc;
 	/* ARM should be halted before changing the interface.
 	   Also, it should not be streaming or decoding */
+	dprintk(1, "%s\n", __func__);
+	if ((dev->cfg_intf == cfg) && (dev->alt_intf == alt) && !force)
+		return 0;
 	if (dev->h51_state == STREAM_MODE_ENCODE)
 		s2226_stop_encode(dev, 0);
 	if (dev->h51_state == STREAM_MODE_DECODE)
 		s2226_stop_decode(dev, 0);
 	/* always send halt */
-	(void) send_persona_halt(dev);
-	/* TODO: this might be fixed in newer firmwares
-	   need to send again or first encode after power up
-	   may not work */
-	(void) send_persona_halt(dev);
+	(void) send_persona_halt(dev, 0, dev->arm_ver);
+
+	/* if startup or reset, send halt again */
+	if (force)
+		(void) send_persona_halt(dev, 0, dev->arm_ver);
 	/* set the interface */
 	rc = usb_set_interface(dev->udev, cfg, alt);
 	s2226_prime_fx2(dev);
+	dev->cfg_intf = cfg;
+	dev->alt_intf = alt;
 	return rc;
 }
 
@@ -1778,6 +2009,7 @@ static int s2226_new_input(struct s2226_dev *dev, int input)
 	int vFormat = 0;
 	int frRed = 0;
 	int is_decode = 0;
+	int rc;
 	switch (input) {
 	case INPUT_COMP0_480I:
 	case INPUT_COMP1_480I:
@@ -1828,8 +2060,7 @@ static int s2226_new_input(struct s2226_dev *dev, int input)
 	case INPUT_H51_HD_720P_50:
 		if (dev->fpga_ver <= 0x18 && dev->fpga_ver != -1) {
 			dev_info(&dev->udev->dev,
-				 "upgrade your FPGA firmware,"
-				 " current %x\n",
+				 "upgrade FPGA curfw: %x\n",
 				 dev->fpga_ver);
 			return -EINVAL;
 		}
@@ -1851,8 +2082,8 @@ static int s2226_new_input(struct s2226_dev *dev, int input)
 			/* for decode */
 			if (input == INPUT_SDI_720P_5994_CB) {
 				dev_info(&dev->udev->dev,
-					 "upgrade your FPGA firmware,"
-					 " current %x\n", dev->fpga_ver);
+					 "upgrade FPGA curfw: %x\n",
+					 dev->fpga_ver);
 				return -EINVAL;
 			}
 			frRed = 0;
@@ -1924,11 +2155,26 @@ static int s2226_new_input(struct s2226_dev *dev, int input)
 		is_decode = 1;
 		break;
 	}
+	rc = 0;
+	dprintk(3, "%s cur: %d new: %d v4l: %d\n", __func__, dev->cur_input, input, dev->v4l_input);
+	if (dev->cur_input != input) {
+		rc = s2226_set_attr(dev, ATTR_INPUT, input);
+		if (rc != 0) /* retry*/
+			rc = s2226_set_attr(dev, ATTR_INPUT, input);
+	}
+
+	if (rc != 0) {
+		dprintk(3, "%s: input %d rc %d\n", __func__, input, rc);
+		dev->cur_input = -1;
+		return rc;
+	}
+
 	dev->cur_input = input;
 	dev->is_decode = is_decode;
 	dev->h51_mode.vFormat = vFormat;
 	dev->h51_mode.frRed = frRed;
 	dev->input_set = 1;
+
 	/*
 	 * new input will clear the audio settings.
 	 * reconfigure if necessary
@@ -1939,7 +2185,8 @@ static int s2226_new_input(struct s2226_dev *dev, int input)
 		SetAudioRoute(dev, dev->aud.iRoute);
 		SetAudioOut(dev);
 	}
-	return 0;
+	dprintk(2, "%s: input %d rc %d\n", __func__, input, rc);
+	return rc;
 }
 
 #define S2226_REG_AUD_INPK_CTL  (0x015<<1)
@@ -1974,304 +2221,106 @@ int s2226_set_audiomux_mpegin(struct s2226_dev *dev, int aud)
 }
 
 
-int s2226_ioctl(struct inode *inode, struct file *file,
-		unsigned int cmd, unsigned long arg);
-
-static long s2226_ioctl_compat(struct file *file,
-			       unsigned int cmd, unsigned long arg)
-{
-	long rc;
-	dprintk(4, "compat ioctl cmd 0x%x, arg 0x%lx\n", cmd, arg);
-	rc = s2226_ioctl(NULL, file, cmd, arg);
-	return rc;
-}
-
-long s2226_ioctl_unlocked(struct file *file,
-			  unsigned int cmd, unsigned long arg)
-{
-	int rc;
-	struct s2226_fh  *fh = (struct s2226_fh *) file->private_data;
-	struct s2226_dev *dev = (struct s2226_dev *) fh->dev;
-	dprintk(4, "ioctl unlocked\n");
-	if (s2226_mutex_lock_interruptible(&dev->ioctl_lock)) {
-		pr_info("could not acquire lock s2226_open\n");
-		return -EAGAIN;
-	}
-	rc = s2226_ioctl(NULL, file, cmd, arg);
-	s2226_mutex_unlock(&dev->ioctl_lock);
-	return rc;
-}
 static int s2226_get_fpga_ver(struct s2226_dev *dev);
 
-int s2226_ioctl(struct inode *inode, struct file *file,
-		unsigned int cmd, unsigned long arg)
+long s2226_ioctl(struct file *file,
+		 unsigned int cmd, unsigned long arg)
 {
-	struct s2226_fh  *fh = (struct s2226_fh *) file->private_data;
-	struct s2226_dev *dev = (struct s2226_dev *) fh->dev;
+	struct s2226_stream *strm = video_drvdata(file);
+	struct s2226_dev *dev = strm->dev;
+	struct s2226_fh *fh = NULL;
 	void __user *argp = (void __user *)arg;
 	int ret = 0;
-	dprintk(4, "fh %p ioctl %x %lx\n", fh, cmd, arg);
+	dprintk(4, "strm %p ioctl %x %lx\n", strm, cmd, arg);
 	if (dev == NULL) {
-		pr_warn("invalid device\n");
+		printk(KERN_INFO "invalid device\n");
 		return -EINVAL;
 	}
-
 	switch (cmd) {
-	case S2226_IOC_DECODE_STATE:
+	case S2226_VIDIOC_DECODE_STATE:
 	{
 		int j;
 		for (j = 0; j < WR_URBS; j++)
-			if (!dev->write_vid[j].ready)
-				return 1;
-		/* still decoding, driver idle,
-		   but H51 decoder could still be running */
+			if (!dev->m->write_vid[j].ready)
+				return 1; /* still decoding */
+		/* driver idle,
+		 * but H51 decoder could still be running */
 		return 0;
 	}
-	case S2226_IOC_I2C_TX:
+	case S2226_VIDIOC_I2C_TX:
 	{
 		i2c_param_t p;
 		unsigned char addr;
-		if (copy_from_user(&p, (void __user *) arg,
-				   sizeof(i2c_param_t)))
+		if (copy_from_user(&p, (void __user *) arg, sizeof(i2c_param_t)))
 			return -EINVAL;
-		addr = (p.addr);/* >> 1*/
-		dprintk(1, "I2C_TX addr:[%x], len:%d, data: %x\n",
-			addr, p.len, p.data[2]);
+		addr = (p.addr);
+		dprintk(1, "I2C_TX addr:[%x], len:%d, data: %x\n", addr, p.len, p.data[2]);
 		ret = s2226_vendor_request(dev,
 					   0x23,
 					   addr, addr,	/* val, idx */
-					   p.data, /* pbuf */
-					   p.len,
+					   p.data, /*pbuf*/
+					   p.len,/* len */
 					   1);	/* bIn */
 		dprintk(1, "I2C_TX %d\n", ret);
 	}
-	case S2226_IOC_SET_MODE:
-	{
-		mode_param_t mode;
-		if (res_locked(dev, fh) & RES_STREAM) {
-			dev_info(&dev->udev->dev,
-				 "s2226: set mode, device busy(streaming)\n");
-			return -EBUSY;
-		}
-		dprintk(3, "set mode\n");
-		if (copy_from_user(&mode, argp, sizeof(mode_param_t)))
-			return -EINVAL;
-		switch (mode.idx) {
-		case S2226_IDX_AMODE:
-			if (mode.val == AMODE_MP1L2 || mode.val == AMODE_AC3 ||
-			    mode.val == AMODE_LPCM || mode.val == AMODE_AAC)
-				dev->h51_mode.aMode = mode.val;
-			else
-				ret = -EINVAL;
-			break;
-		case S2226_IDX_ABITRATE:
-			if (mode.val > 0 && mode.val <= 256)
-				dev->h51_mode.aBitrate = mode.val;
-			else
-				ret = -EINVAL;
-			break;
-		case S2226_IDX_VBITRATE:
-			if (mode.val > 0 && mode.val <= 20000)
-				dev->h51_mode.vBitrate = mode.val;
-			else
-				ret = -EINVAL;
-			break;
-		case S2226_IDX_STEREO:
-			if (mode.val >= 0 && mode.val <= 1)
-				dev->h51_mode.aStereo = mode.val;
-			else
-				ret = -EINVAL;
-			break;
-		case S2226_IDX_AUDROUTE:
-			if (mode.val >= 0 &&
-			    mode.val <= AUDIOROUTE_LINE2L_BYPASS)
-				SetAudioRoute(dev, mode.val);
-			else
-				ret = -EINVAL;
-			break;
-		case S2226_IDX_AUDIN_GAIN_L:
-		case S2226_IDX_AUDIN_GAIN_R:
-		case S2226_IDX_AUDIN_GAIN:
-			if (!(mode.val >= 0 && mode.val <= 118))
-				return -EINVAL;
-			if (mode.idx == S2226_IDX_AUDIN_GAIN_L)
-				SetAudioLeftGain(dev, mode.val);
-			else if (mode.idx == S2226_IDX_AUDIN_GAIN_R)
-				SetAudioRightGain(dev, mode.val);
-			else {
-				SetAudioLeftGain(dev, mode.val);
-				SetAudioRightGain(dev, mode.val);
-			}
-			break;
-		case S2226_IDX_AUDIN_AGC_GAIN_L:
-		case S2226_IDX_AUDIN_AGC_GAIN_R:
-		case S2226_IDX_AUDIN_AGC_GAIN:
-			if (!(mode.val >= 0 && mode.val <= 118))
-				return -EINVAL;
-			if (mode.idx == S2226_IDX_AUDIN_AGC_GAIN_R)
-				SetAudioRightAGC(dev, dev->aud.bAGC_R,
-						 mode.val);
-			else if (mode.idx == S2226_IDX_AUDIN_AGC_GAIN_L)
-				SetAudioLeftAGC(dev, dev->aud.bAGC_L, mode.val);
-			else {
-				SetAudioRightAGC(dev, dev->aud.bAGC_R,
-						 mode.val);
-				SetAudioLeftAGC(dev, dev->aud.bAGC_L, mode.val);
-			}
-			break;
-		case S2226_IDX_AUDIN_AGC_ON:
-		case S2226_IDX_AUDIN_AGC_ON_R:
-		case S2226_IDX_AUDIN_AGC_ON_L:
-			if (!(mode.val >= 0 && mode.val <= 1))
-				return -EINVAL;
-			if (mode.idx == S2226_IDX_AUDIN_AGC_ON_R)
-				SetAudioRightAGC(dev, mode.val,
-						 dev->aud.iAGCRightGain);
-			else if (mode.idx == S2226_IDX_AUDIN_AGC_ON_L)
-				SetAudioLeftAGC(dev, mode.val,
-						dev->aud.iAGCLeftGain);
-			else {
-				SetAudioRightAGC(dev, mode.val,
-						 dev->aud.iAGCRightGain);
-				SetAudioLeftAGC(dev, mode.val,
-						dev->aud.iAGCLeftGain);
-			}
-			break;
-		case S2226_IDX_AUDIN_BAL:
-		case S2226_IDX_AUDIN_BAL_L:
-		case S2226_IDX_AUDIN_BAL_R:
-			if (!(mode.val >= 0 && mode.val <= 1))
-				return -EINVAL;
-			if (mode.idx == S2226_IDX_AUDIN_BAL_L)
-				SetAudioBalL(dev, mode.val);
-			else if (mode.idx == S2226_IDX_AUDIN_BAL_R)
-				SetAudioBalR(dev, mode.val);
-			else {
-				SetAudioBalL(dev, mode.val);
-				SetAudioBalR(dev, mode.val);
-			}
-			break;
-		}
-		dprintk(3, "set mode: ret: %d\n", ret);
-		break;
-	}
-	case S2226_IOC_GET_MODE:
-	{
-		mode_param_t mode;
-		dprintk(3,  "get mode\n");
-		if (copy_from_user(&mode, argp, sizeof(mode_param_t)))
-			return -EINVAL;
-		dprintk(3, "get mode: idx %d\n", mode.idx);
-		switch (mode.idx) {
-		case S2226_IDX_AMODE:
-			mode.val = dev->h51_mode.aMode;
-			break;
-		case S2226_IDX_ABITRATE:
-			mode.val = dev->h51_mode.aBitrate;
-			break;
-		case S2226_IDX_VBITRATE:
-			mode.val = dev->h51_mode.vBitrate;
-			break;
-		case S2226_IDX_STEREO:
-			mode.val = dev->h51_mode.aStereo;
-			break;
-		}
-		ret = copy_to_user(argp, &mode, sizeof(mode_param_t));
-		break;
-	}
-	case S2226_IOC_STARTENCODE:
+	break;
+	case S2226_VIDIOC_STARTDECODE:
 	{
 		start_param_t cmd;
-		dprintk(3, "start encode\n");
+		dprintk(1, "start decode\n");
+		if (strm->type != S2226_STREAM_DECODE) {
+			printk(KERN_INFO "S2226_VIDIOC_STARTDECODE invalid handle\n");
+			return -EINVAL;
+		}
+		fh = file->private_data;
 		if (copy_from_user(&cmd, argp, sizeof(cmd)))
 			return -EINVAL;
-		dprintk(3, "start encode channel %d\n", cmd.idx);
-		if (!res_get(dev, fh, RES_STREAM)) {
-			dev_info(&dev->udev->dev,
-				 "s2226: stream busy\n");
+		if (vb2_is_streaming(&dev->m->vb_vidq)) {
+			printk(KERN_INFO "s2226: stream busy m\n");
 			return -EBUSY;
 		}
-		(void) s2226_set_attr(dev, ATTR_INPUT, dev->cur_input);
-		(void) s2226_set_audiomux_mpegin(dev, dev->cur_audiompeg);
-		ret = s2226_start_encode(dev, cmd.idx, S2226_CONTEXT_USBDEV);
-		if (ret != 0)
-			res_free(dev, fh, RES_STREAM);
-		return ret;
-	}
-	case S2226_IOC_STARTDECODE:
-	{
-		start_param_t cmd;
-		dprintk(3, "start decode\n");
-		if (copy_from_user(&cmd, argp, sizeof(cmd)))
-			return -EINVAL;
+		if (vb2_is_streaming(&dev->p->vb_vidq)) {
+			printk(KERN_INFO "s2226: stream busy p\n");
+			return -EBUSY;
+		}
 		dprintk(3, "start decode channel %d\n", cmd.idx);
-		if (!res_get(dev, fh, RES_STREAM)) {
-			dev_info(&dev->udev->dev,
-				 "s2226: stream busy\n");
+		if (!res_get(dev, fh, RES_DECODE)) {
+			printk(KERN_INFO "s2226: stream busy\n");
 			return -EBUSY;
 		}
+		dprintk(2, "start decode %d\n", cmd.idx);
 		ret = s2226_start_decode(dev, cmd.idx);
+		dprintk(2, "start decode done %d\n", ret);
 		if (ret != 0)
-			res_free(dev, fh, RES_STREAM);
+			res_free(dev, fh, RES_DECODE);
 		return ret;
 	}
-	case S2226_IOC_STOPENCODE:
+	case S2226_VIDIOC_STOPDECODE:
 	{
 		stop_param_t cmd;
 		int i;
-		if ((res_locked(dev, fh) & RES_STREAM) &&
-		    !(res_check(fh) & RES_STREAM)) {
-			/* other handle owns the streaming resource
-			   (If no handle owns resource, allow re-sending
-			   a stop encode or decode command even if stream
-			   not running) */
-			return 0;
-		}
-		if (copy_from_user(&cmd, argp, sizeof(cmd)))
-			return -EINVAL;
-		dprintk(2, "s2226: stop encode, kill urbs\n");
-		for (i = 0; i < RD_URBS; i++) {
-			usb_kill_urb(dev->read_vid[i].urb);
-			dev->read_vid[i].ready = 1;
-		}
-		/*dprintk(3, "stop encode channel %d\n", cmd.idx);*/
-		ret = s2226_stop_encode(dev, cmd.idx);
-		res_free(dev, fh, RES_STREAM);
-		dev->h51_reload_required  = 1;
-		return ret;
-	}
-	case S2226_IOC_STOPDECODE:
-	{
-		stop_param_t cmd;
-		int i;
-		if ((res_locked(dev, fh) & RES_STREAM) &&
-		    !(res_check(fh) & RES_STREAM)) {
-			/* other handle owns the streaming resource
-			   (If no handle owns resource, allow re-sending
-			   a stop encode or decode command even if stream
-			   not running) */
+		fh = file->private_data;
+		dprintk(2, "stop decode\n");
+		if ((res_locked(dev, fh) & RES_DECODE) && !(res_check(fh) & RES_DECODE)) {
+			/* other handle owns the streaming resource */
+			dprintk(1, "stop decode not ours\n");
 			return 0;
 		}
 		if (copy_from_user(&cmd, argp, sizeof(cmd)))
 			return -EINVAL;
 		/* kill the urbs */
-		dprintk(2, "s2226, stop decode, kill urbs\n");
+		dprintk(1, "s2226, stop decode, kill urbs\n");
 		for (i = 0; i < WR_URBS; i++) {
-			usb_kill_urb(dev->write_vid[i].urb);
-			dev->write_vid[i].ready = 1;
+			usb_kill_urb(dev->d->write_vid[i].urb);
+			dev->d->write_vid[i].ready = 1;
 		}
-		/*dprintk(3, "stop encode channel %d\n", cmd.idx);*/
 		ret = s2226_stop_decode(dev, cmd.idx);
-		res_free(dev, fh, RES_STREAM);
+		dprintk(2, "stop decode %d\n", ret);
+		res_free(dev, fh, RES_DECODE);
 		dev->h51_reload_required  = 1;
 		return ret;
 	}
-	case S2226_IOC_GET_STATUS:
-	{
-		/* TODO */
-		return -EINVAL;
-	}
-	case S2226_IOC_SDII_WR:
+	case S2226_VIDIOC_SDII_WR:
 	{
 		struct io_reg cmd;
 		if (copy_from_user(&cmd, argp, sizeof(cmd)))
@@ -2280,7 +2329,7 @@ int s2226_ioctl(struct inode *inode, struct file *file,
 		ret = send_sdi_write(dev, cmd.addr, cmd.val, 1);
 		break;
 	}
-	case S2226_IOC_SDII_RD:
+	case S2226_VIDIOC_SDII_RD:
 	{
 		struct io_reg cmd;
 		if (copy_from_user(&cmd, argp, sizeof(cmd)))
@@ -2294,7 +2343,7 @@ int s2226_ioctl(struct inode *inode, struct file *file,
 		ret = copy_to_user(argp, &cmd, sizeof(cmd));
 		break;
 	}
-	case S2226_IOC_SDIO_WR:
+	case S2226_VIDIOC_SDIO_WR:
 	{
 		struct io_reg cmd;
 		if (copy_from_user(&cmd, argp, sizeof(cmd)))
@@ -2303,7 +2352,7 @@ int s2226_ioctl(struct inode *inode, struct file *file,
 		ret = send_sdi_write(dev, cmd.addr, cmd.val, 0);
 		break;
 	}
-	case S2226_IOC_SDIO_RD:
+	case S2226_VIDIOC_SDIO_RD:
 	{
 		struct io_reg cmd;
 		if (copy_from_user(&cmd, argp, sizeof(cmd)))
@@ -2317,7 +2366,7 @@ int s2226_ioctl(struct inode *inode, struct file *file,
 		ret = copy_to_user(argp, &cmd, sizeof(cmd));
 		break;
 	}
-	case S2226_IOC_FPGA_WR:
+	case S2226_VIDIOC_FPGA_WR:
 	{
 		struct io_reg cmd;
 		if (copy_from_user(&cmd, argp, sizeof(cmd)))
@@ -2328,7 +2377,7 @@ int s2226_ioctl(struct inode *inode, struct file *file,
 			return ret;
 		break;
 	}
-	case S2226_IOC_FPGA_WR_BURST:
+	case S2226_VIDIOC_FPGA_WR_BURST:
 	{
 		struct io_burst cmd;
 		if (copy_from_user(&cmd, argp, sizeof(cmd)))
@@ -2340,43 +2389,41 @@ int s2226_ioctl(struct inode *inode, struct file *file,
 			return ret;
 		break;
 	}
-	case S2226_IOC_FPGA_WR_BURST_FAST:
+	case S2226_VIDIOC_FPGA_WR_BURST_FAST:
 	{
 		struct io_burst cmd;
 		if (dev->arm_ver < 0x50) {
 			dev_info(&dev->udev->dev,
-				 "s2226: ioctl not available for this"
-				 " firmware[0x%x]\n", dev->arm_ver);
+				 "s2226: need newer fw [0x%x]\n", dev->arm_ver);
 			return -EINVAL;
 		}
 		if (copy_from_user(&cmd, argp, sizeof(cmd)))
 			return -EINVAL;
-		dprintk(2, "S2226_IOC_FPGA_WR_BURST_FAST %x\n", cmd.addr);
+		dprintk(2, "S2226_VIDIOC_FPGA_WR_BURST_FAST %x\n", cmd.addr);
 		ret = send_fpga_write_burst(dev, cmd.addr, cmd.data,
 					    cmd.len, FPGA_WRITE_FAST);
 		if (ret < 0)
 			return ret;
 		break;
 	}
-	case S2226_IOC_FPGA_WR_ADDRDATA:
+	case S2226_VIDIOC_FPGA_WR_ADDRDATA:
 	{
 		struct io_burst cmd;
 		if (dev->arm_ver < 0x58) {
 			dev_info(&dev->udev->dev,
-				 "s2226: ioctl not available"
-				 " for this firmware[0x%x]\n", dev->arm_ver);
+				 "s2226: need newer firmware[0x%x]\n", dev->arm_ver);
 			return -EINVAL;
 		}
 		if (copy_from_user(&cmd, argp, sizeof(cmd)))
 			return -EINVAL;
-		dprintk(2, "S2226_IOC_FPGA_WR_ADDRDATA %x\n", cmd.addr);
+		dprintk(2, "S2226_VIDIOC_FPGA_WR_ADDRDATA %x\n", cmd.addr);
 		ret = send_fpga_write_burst(dev, cmd.addr, cmd.data, cmd.len,
 					    FPGA_WRITE_ADDRDATA);
 		if (ret < 0)
 			return ret;
 		break;
 	}
-	case S2226_IOC_FPGA_RD:
+	case S2226_VIDIOC_FPGA_RD:
 	{
 		struct io_reg cmd;
 		if (copy_from_user(&cmd, argp, sizeof(cmd)))
@@ -2387,7 +2434,7 @@ int s2226_ioctl(struct inode *inode, struct file *file,
 		ret = copy_to_user(argp, &cmd, sizeof(cmd));
 		break;
 	}
-	case S2226_IOC_FPGA_RD_BURST:
+	case S2226_VIDIOC_FPGA_RD_BURST:
 	{
 		struct io_burst cmd;
 		if (copy_from_user(&cmd, argp, sizeof(cmd)))
@@ -2398,7 +2445,7 @@ int s2226_ioctl(struct inode *inode, struct file *file,
 		ret = copy_to_user(argp, &cmd, sizeof(cmd));
 		break;
 	}
-	case S2226_IOC_H51_WR:
+	case S2226_VIDIOC_H51_WR:
 	{
 		struct io_reg cmd;
 		if (copy_from_user(&cmd, argp, sizeof(cmd)))
@@ -2409,7 +2456,7 @@ int s2226_ioctl(struct inode *inode, struct file *file,
 			return ret;
 		break;
 	}
-	case S2226_IOC_H51_RD:
+	case S2226_VIDIOC_H51_RD:
 	{
 		struct io_reg cmd;
 		if (copy_from_user(&cmd, argp, sizeof(cmd)))
@@ -2420,24 +2467,25 @@ int s2226_ioctl(struct inode *inode, struct file *file,
 		ret = copy_to_user(argp, &cmd, sizeof(cmd));
 		break;
 	}
-	case S2226_IOC_SET_ATTR:
+#if 0
+	case S2226_VIDIOC_SET_ATTR:
 	{
 		struct io_reg cmd;
 		if (copy_from_user(&cmd, argp, sizeof(cmd)))
 			return -EINVAL;
 #define S2226_ATTR_INPUT       13
-		if ((res_locked(dev, fh) & RES_STREAM) &&
-		    (cmd.addr == S2226_ATTR_INPUT)) {
-			dev_info(&dev->udev->dev,
-				 "s2226: set attr,"
-				 "device busy(streaming)\n");
+
+		if ((res_locked(dev, fh) & RES_STREAM) && (cmd.addr == S2226_ATTR_INPUT)) {
+			printk(KERN_INFO "s2226: set attr, device busy(streaming)\n");
 			return -EBUSY;
 		}
+
 		dprintk(2, "set attr %x:%x\n", cmd.addr, cmd.val);
 		ret = s2226_set_attr(dev, cmd.addr, cmd.val);
 		break;
 	}
-	case S2226_IOC_GET_ATTR:
+#endif
+	case S2226_VIDIOC_GET_ATTR:
 	{
 		struct io_reg cmd;
 		struct attr_ext cmd2;
@@ -2453,7 +2501,7 @@ int s2226_ioctl(struct inode *inode, struct file *file,
 			ret = copy_to_user(argp, &cmd2, sizeof(cmd));
 		break;
 	}
-	case S2226_IOC_FLASH_WR:
+	case S2226_VIDIOC_FLASH_WR:
 	{
 		struct flash_param p;
 		if (dev->users > 1) {
@@ -2472,7 +2520,7 @@ int s2226_ioctl(struct inode *inode, struct file *file,
 			return ret;
 		break;
 	}
-	case S2226_IOC_FLASH_RD:
+	case S2226_VIDIOC_FLASH_RD:
 	{
 		struct flash_param p;
 		if (copy_from_user(&p, argp, sizeof(p)))
@@ -2484,7 +2532,7 @@ int s2226_ioctl(struct inode *inode, struct file *file,
 		ret = copy_to_user(argp, &p, sizeof(p));
 		break;
 	}
-	case S2226_IOC_FLASH_ERASE:
+	case S2226_VIDIOC_FLASH_ERASE:
 	{
 		struct flash_param p;
 		if (dev->users > 1) {
@@ -2504,7 +2552,7 @@ int s2226_ioctl(struct inode *inode, struct file *file,
 			return ret;
 		break;
 	}
-	case S2226_IOC_BOOT_H51:
+	case S2226_VIDIOC_BOOT_H51:
 		dev_info(&dev->udev->dev, "s226: ioc boot h51\n");
 		if (res_locked(dev, fh) & RES_STREAM) {
 			dev_info(&dev->udev->dev,
@@ -2515,7 +2563,8 @@ int s2226_ioctl(struct inode *inode, struct file *file,
 		if (ret < 0)
 			return ret;
 		break;
-	case S2226_IOC_BOOT_FPGA:
+#if 0
+	case S2226_VIDIOC_BOOT_FPGA:
 		if (res_locked(dev, fh) & RES_STREAM) {
 			dev_info(&dev->udev->dev,
 				 "s2226: boot, device busy(streaming)\n");
@@ -2525,13 +2574,15 @@ int s2226_ioctl(struct inode *inode, struct file *file,
 		if (ret < 0)
 			return ret;
 		break;
-	case S2226_IOC_SET_INPUT:
-		dprintk(3, "set input %d\n", (int)arg);
+	case S2226_VIDIOC_SET_INPUT:
+		dprintk(0, "set input %d\n", (int)arg);
 		if (res_locked(dev, fh) & RES_STREAM) {
 			dev_info(&dev->udev->dev,
 				 "s2226: boot, device busy(streaming)\n");
 			return -EBUSY;
 		}
+		return 0;
+		ret = s2226_set_attr(dev, ATTR_INPUT, arg);
 		ret = s2226_set_attr(dev, ATTR_INPUT, arg);
 		if (dev->fpga_ver <= 0)
 			s2226_get_fpga_ver(dev);
@@ -2545,11 +2596,12 @@ int s2226_ioctl(struct inode *inode, struct file *file,
 		}
 		(void) s2226_set_audiomux_mpegin(dev, dev->cur_audiompeg);
 		break;
-	case S2226_IOC_GET_INPUT:
+#endif
+	case S2226_VIDIOC_GET_INPUT:
 		dprintk(3, "get input %d\n", (int)dev->cur_input);
 		ret = copy_to_user(argp, &dev->cur_input, sizeof(cmd));
 		break;
-	case S2226_IOC_AUDIO_WR:
+	case S2226_VIDIOC_AUDIO_WR:
 	{
 		audio_reg_t cmd;
 		if (copy_from_user(&cmd, argp, sizeof(cmd)))
@@ -2560,7 +2612,7 @@ int s2226_ioctl(struct inode *inode, struct file *file,
 			return ret;
 		break;
 	}
-	case S2226_IOC_AUDIO_RD:
+	case S2226_VIDIOC_AUDIO_RD:
 	{
 		struct io_reg cmd;
 		if (copy_from_user(&cmd, argp, sizeof(cmd)))
@@ -2571,7 +2623,7 @@ int s2226_ioctl(struct inode *inode, struct file *file,
 		ret = copy_to_user(argp, &cmd, sizeof(cmd));
 		break;
 	}
-	case S2226_IOC_VIDDEC_RD:
+	case S2226_VIDIOC_VIDDEC_RD:
 	{
 		struct io_reg cmd;
 		if (copy_from_user(&cmd, argp, sizeof(cmd)))
@@ -2582,7 +2634,7 @@ int s2226_ioctl(struct inode *inode, struct file *file,
 		ret = copy_to_user(argp, &cmd, sizeof(cmd));
 		break;
 	}
-	case S2226_IOC_SDISPLIT_RD:
+	case S2226_VIDIOC_SDISPLIT_RD:
 	{
 		struct io_reg cmd;
 		if (copy_from_user(&cmd, argp, sizeof(cmd)))
@@ -2593,32 +2645,32 @@ int s2226_ioctl(struct inode *inode, struct file *file,
 		ret = copy_to_user(argp, &cmd, sizeof(cmd));
 		break;
 	}
-	case S2226_IOC_RESET_BOARD:
+	case S2226_VIDIOC_RESET_BOARD:
 		/* If resetting from user space, should do the following
-		   S2226_IOC_RESET_BOARD
+		   S2226_VIDIOC_RESET_BOARD
 		   sleep(2)
-		   S2226_IOC_PRIME_FX2
-		   S2226_IOC_DEFAULT_PARAMS */
+		   S2226_VIDIOC_PRIME_FX2
+		   S2226_VIDIOC_DEFAULT_PARAMS */
 		ret = s2226_reset_board(dev);
 		break;
-	case S2226_IOC_ARM_VER:
+	case S2226_VIDIOC_ARM_VER:
 		ret = copy_to_user(argp, &dev->arm_ver, sizeof(cmd));
 		break;
-	case S2226_IOC_SET_BASEFW:
+	case S2226_VIDIOC_SET_BASEFW:
 		ret = s2226_fx2sam(dev, 0);
 		dprintk(2, "%s FX2SAM_LO %d\n", __func__, ret);
 		break;
-	case S2226_IOC_SET_NEWFW:
+	case S2226_VIDIOC_SET_NEWFW:
 		ret = s2226_fx2sam(dev, 1);
 		dprintk(2, "%s FX2SAM_HI %d\n", __func__, ret);
 		break;
-	case S2226_IOC_NOP:
+	case S2226_VIDIOC_NOP:
 		/* sends NOP to the ARM. For use in firmware
 		   if ARM does not */
 		ret = s2226_send_nop(dev, 1);
 		dprintk(2, "%s NOP %d\n", __func__, ret);
 		break;
-	case S2226_IOC_RESET_USB:
+	case S2226_VIDIOC_RESET_USB:
 		/* if firmware corrupt, we may have to reset the USB also */
 		if (dev->users > 1) {
 			dev_info(&dev->udev->dev,
@@ -2628,7 +2680,7 @@ int s2226_ioctl(struct inode *inode, struct file *file,
 		ret = usb_reset_device(dev->udev);
 		dprintk(2, "%s USB_RESET %d\n", __func__, ret);
 		break;
-	case S2226_IOC_PRIME_FX2:
+	case S2226_VIDIOC_PRIME_FX2:
 		if (dev->users > 1) {
 			dev_info(&dev->udev->dev,
 				 "s2226: PRIME_FX2 device busy\n");
@@ -2637,27 +2689,27 @@ int s2226_ioctl(struct inode *inode, struct file *file,
 		ret = s2226_prime_fx2(dev);
 		dprintk(2, "%s PRIME_FX2 %d\n", __func__, ret);
 		break;
-	case S2226_IOC_DEFAULT_PARAMS:
+	case S2226_VIDIOC_DEFAULT_PARAMS:
 		ret = s2226_default_params(dev);
 		break;
-	case S2226_IOC_DPB_SIZE:
+	case S2226_VIDIOC_DPB_SIZE:
 		dprintk(3, "%s set DPB SIZE %d\n", __func__, (int)arg);
 		dev->dpb_size = (int)arg;
 		break;
-	case S2226_IOC_GOP_STRUCT:
+	case S2226_VIDIOC_GOP_STRUCT:
 		dprintk(3, "%s set GOP STRUCT %d\n", __func__, (int)arg);
 		dev->gop_struct = (int)arg;
 		break;
-	case S2226_IOC_AINOFFSET:
+	case S2226_VIDIOC_AINOFFSET:
 		dprintk(3, "%s set AINOFFSET %d\n", __func__, (int)arg);
 		dev->ainoffset = (int)arg;
 		break;
-	case S2226_IOC_AV_RESYNC:
+	case S2226_VIDIOC_AV_RESYNC:
 		dprintk(3, "%s set AV_RESYNC_THRESHOLD %d\n",
 			__func__, (int)arg);
 		dev->avresync = (int)arg;
 		break;
-	case S2226_IOC_GET_LEVEL:
+	case S2226_VIDIOC_GET_LEVEL:
 	{
 		struct level_param lvl;
 		dprintk(3, "get level\n");
@@ -2684,7 +2736,7 @@ int s2226_ioctl(struct inode *inode, struct file *file,
 		break;
 	}
 	break;
-	case S2226_IOC_SET_LEVEL:
+	case S2226_VIDIOC_SET_LEVEL:
 	{
 		struct level_param lvl;
 		if (copy_from_user(&lvl, argp, sizeof(struct level_param)))
@@ -2709,7 +2761,7 @@ int s2226_ioctl(struct inode *inode, struct file *file,
 		ret = 0;
 		break;
 	}
-	case S2226_IOC_FX2_VER:
+	case S2226_VIDIOC_FX2_VER:
 	{
 		char buf[64];
 		int siz = 64; /* EP0 is 64 bytes max */
@@ -2727,306 +2779,201 @@ int s2226_ioctl(struct inode *inode, struct file *file,
 		ret = buf[0] + (buf[1] << 8);
 		break;
 	}
-	case S2226_IOC_LOCK_OVERLAY:
+	case S2226_VIDIOC_LOCK_OVERLAY:
 	{
-		if (!res_get(dev, fh, RES_OVERLAY)) {
-			dev_info(&dev->udev->dev, "overlay already locked\n");
+		if (!ovl_get(dev, file)) {
+			printk(KERN_INFO "overlay already locked\n");
 			return -EBUSY;
 		}
 		ret = 0;
 		break;
 	}
-	case S2226_IOC_UNLOCK_OVERLAY:
+	case S2226_VIDIOC_UNLOCK_OVERLAY:
 	{
-		if (res_check(fh) & RES_OVERLAY)
-			res_free(dev, fh, RES_OVERLAY);
+		if (ovl_check(dev, file))
+			ovl_free(dev);
 		ret = 0;
 		break;
 	}
 	default:
-		ret = -EINVAL;
+		ret = video_ioctl2(file, cmd, arg);
 		break;
 	}
 
 	return ret;
 }
 
-
-static void s2226_delete(struct kref *kref)
+static void s2226_release(struct v4l2_device *v4l2_dev)
 {
-	struct s2226_dev *dev = to_s2226_dev(kref);
+	struct s2226_dev *dev = container_of(v4l2_dev, struct s2226_dev,
+					     v4l2_dev);
 	int i;
 
+	v4l2_device_unregister(&dev->v4l2_dev);
 	kfree(dev->interrupt_buffer);
 	kfree(dev->control_buffer);
 	for (i = 0; i < WR_URBS; i++) {
-		usb_free_urb(dev->write_vid[i].urb);
-		kfree(dev->write_vid[i].buffer);
+		if (dev->d->write_vid[i].buffer)
+			usb_free_urb(dev->d->write_vid[i].urb);
+		kfree(dev->d->write_vid[i].buffer);
+		dev->d->write_vid[i].buffer = NULL;
 	}
 	for (i = 0; i < RD_URBS; i++) {
-		usb_free_urb(dev->read_vid[i].urb);
-		kfree(dev->read_vid[i].buffer);
+		if (dev->m->read_vid[i].buffer)
+			usb_free_urb(dev->m->read_vid[i].urb);
+		kfree(dev->m->read_vid[i].buffer);
+		dev->m->read_vid[i].buffer = NULL;
+		if (dev->p->read_vid[i].buffer)
+			usb_free_urb(dev->p->read_vid[i].urb);
+		kfree(dev->p->read_vid[i].buffer);
+		dev->p->read_vid[i].buffer = NULL;
 	}
 	usb_free_urb(dev->interrupt_urb);
 	usb_free_urb(dev->control_urb);
-	usb_put_dev(dev->udev);
-	s2226_exit_v4l(dev);
 	kfree(dev);
 	pr_info("s2226 memory released\n");
 }
 
-static int s2226_open(struct inode *inode, struct file *file)
-{
-	struct s2226_dev *dev;
-	struct s2226_fh  *fh = NULL;
-	struct usb_interface *interface;
-	int subminor;
-	int retval = 0;
-	dprintk(2, "s2226_open\n");
-	subminor = iminor(inode);
-	interface = usb_find_interface(&s2226_driver, subminor);
-	if (!interface) {
-		pr_info("%s - error, can't find device for minor %d",
-			__func__, subminor);
-		retval = -ENODEV;
-		goto exit_err;
-	}
-	dev = usb_get_intfdata(interface);
-	if (!dev) {
-		retval = -ENODEV;
-		goto exit_err;
-	}
-
-	if (s2226_mutex_lock_interruptible(&s2226_devices_lock)) {
-		pr_info("could not acquire lock s2226_open\n");
-		return -ERESTARTSYS;
-	}
-	if (dev->users > 0)
-		dprintk(4, "s2226:  device already open.\n");
-	/* allocate file context data */
-	fh = kmalloc(sizeof(struct s2226_fh), GFP_KERNEL);
-	if (NULL == fh) {
-		pr_info("s2226: out of memory\n");
-		s2226_mutex_unlock(&s2226_devices_lock);
-		return -ENOMEM;
-	}
-	memset(fh, 0, sizeof(struct s2226_fh));
-	dprintk(1, "opened dev [%d] %p\n", subminor, dev);
-	file->private_data = fh;
-	fh->dev = dev;
-	/* increment our usage count for the device */
-	dev->users++;
-	dprintk(1, "s2226: number of users %d\n", dev->users);
-	kref_get(&dev->kref);
-	s2226_mutex_unlock(&s2226_devices_lock);
-	return 0;
-exit_err:
-	kfree(fh);
-	return retval;
-}
-
-static int s2226_release(struct inode *inode, struct file *file)
-{
-	struct s2226_fh         *fh = file->private_data;
-	struct s2226_dev        *dev;
-	int i;
-	int res;
-	if (s2226_mutex_lock_interruptible(&s2226_devices_lock))
-		return -ERESTARTSYS;
-	if (fh == NULL) {
-		s2226_mutex_unlock(&s2226_devices_lock);
-		return -ENODEV;
-	}
-	dev = fh->dev;
-	if (dev == NULL) {
-		s2226_mutex_unlock(&s2226_devices_lock);
-		return -ENODEV;
-	}
-	res = res_check(fh);
-	if (res) {
-		if (res & RES_STREAM) {
-			if (dev->h51_state == STREAM_MODE_ENCODE)
-				s2226_stop_encode(dev, 0);
-			if (dev->h51_state == STREAM_MODE_DECODE)
-				s2226_stop_decode(dev, 0);
-			for (i = 0; i < WR_URBS; i++) {
-				usb_kill_urb(dev->write_vid[i].urb);
-				dev->write_vid[i].ready = 1;
-			}
-			for (i = 0; i < RD_URBS; i++) {
-				usb_kill_urb(dev->read_vid[i].urb);
-				dev->read_vid[i].ready = 0;
-			}
-		}
-		res_free(dev, fh, res);
-	}
-	kfree(fh);
-	dev->users--;
-	s2226_mutex_unlock(&s2226_devices_lock);
-	/* decrement the count on our device */
-	kref_put(&dev->kref, s2226_delete);
-	return 0;
-}
 
 
 static void s2226_read_vid_callback(struct urb *u)
 {
 	struct s2226_urb *urb;
 	struct s2226_dev *dev;
-	int i;
 	int urb_context;
 	urb = (struct s2226_urb *)u->context;
+	if (urb == NULL) {
+		printk(KERN_DEBUG "read vid callback failed\n");
+		return;
+	}
 	dev = urb->dev;
+	if (dev == NULL) {
+		printk(KERN_DEBUG "null device\n");
+		return;
+	}
 	urb_context = urb->context;
 	urb->ready = 1;
-
-	for (i = 0; urb != &urb->dev->read_vid[i]; i++)
-		; /* find the index of the urb that completed */
-
-	dprintk(4, "s2226_read_vid_callback %d\n", i);
+	dprintk(4, "s2226_read_vid_callback %d\n", 0);
 	if (urb_context == S2226_CONTEXT_V4L) {
-		s2226_got_data(dev, i);
+		s2226_got_data(urb->strm, u->transfer_buffer, u->actual_length);
 		/* submit the urb again */
-		dprintk(4, "data from URB %d, resubmit URB\n", i);
-		usb_fill_bulk_urb(dev->read_vid[i].urb, dev->udev,
-				  usb_rcvbulkpipe(dev->udev,
-						  dev->ep[INDEX_EP_H264]),
-				  (void *) dev->read_vid[i].buffer,
-				  S2226_RB_PKT_SIZE,
+		dprintk(4, "data from URB %d, resubmit URB\n", 0);
+		usb_fill_bulk_urb(u, dev->udev,
+				  usb_rcvbulkpipe(dev->udev, dev->ep[INDEX_EP_H264]),
+				  (void *) u->transfer_buffer,
+				  u->transfer_buffer_length,
 				  s2226_read_vid_callback,
-				  &dev->read_vid[i]);
-		/*dev->read_vid[i].ready = 0;*/
-		(void) usb_submit_urb(dev->read_vid[i].urb, GFP_ATOMIC);
-	} else {
-		wake_up(&urb->dev->read_vid_wq);
+				  urb);
+		(void) usb_submit_urb(u, GFP_ATOMIC);
 	}
 	return;
 }
 
 
-static ssize_t s2226_read_vid(struct file *file, char *buffer, size_t nbytes,
-			      loff_t *ppos)
+static void s2226_read_preview_callback(struct urb *u)
 {
-	struct s2226_fh *fh = (struct s2226_fh *) file->private_data;
-	struct s2226_dev *dev = (struct s2226_dev *) fh->dev;
-	int i;
-	int rc;
-	/* only let the handle that started the encode do the reading */
-	if (res_locked(dev, fh) & RES_STREAM) {
-		/* if locked */
-		if (!(res_check(fh) & RES_STREAM)) {
-			dev_info(&dev->udev->dev,
-				 "s2226: other file handle owns"
-				 " resource. read failed\n");
-			return 0;
-		}
+	struct s2226_urb *urb;
+	struct s2226_dev *dev;
+	int urb_context;
+	urb = (struct s2226_urb *)u->context;
+	if (!urb->strm->active) {
+		dprintk(1, "got urb, not active\n");
+		return;
 	}
+	dev = urb->dev;
+	urb_context = urb->context;
+	urb->ready = 1;
+	dprintk(4, "s2226_read_vid_callback %d\n", u->actual_length);
+	s2226_got_preview_data(urb->strm, u->transfer_buffer, u->actual_length);
 
-	if (nbytes != S2226_RB_PKT_SIZE)
-		return -EINVAL;
-
-	i = dev->read_vid_head++;
-	if (i+1 == RD_URBS)
-		dev->read_vid_head = 0;
-	while (dev->read_vid[i].ready == 0) {
-		rc = wait_event_interruptible_timeout(
-			dev->read_vid_wq,
-			(dev->read_vid[i].ready != 0),
-			msecs_to_jiffies(6000));
-		dprintk(4, "%s wait ready: %d\n", __func__, rc);
-		if (rc <= 0) /* interrupted or timeout */
-			return rc;
-	}
-
-	rc = copy_to_user(buffer, dev->read_vid[i].buffer, S2226_RB_PKT_SIZE);
-	if (dev->udev == NULL)
-		return -ENODEV;
-	usb_fill_bulk_urb(dev->read_vid[i].urb, dev->udev,
-			  usb_rcvbulkpipe(dev->udev, dev->ep[INDEX_EP_H264]),
-			  (void *) dev->read_vid[i].buffer,
-			  S2226_RB_PKT_SIZE,
-			  s2226_read_vid_callback,
-			  &dev->read_vid[i]);
-	dev->read_vid[i].ready = 0;
-	rc = usb_submit_urb(dev->read_vid[i].urb, GFP_KERNEL);
-	if (rc != 0) {
-		dprintk(0, "%s: urb failed 0x%x\n", __func__, rc);
-		return rc;
-	}
-
-	return S2226_RB_PKT_SIZE;
+	/* submit the urb again */
+	dprintk(4, "data from URB %d, resubmit URB\n", 0);
+	usb_fill_bulk_urb(u, dev->udev,
+			  usb_rcvbulkpipe(dev->udev, dev->ep[INDEX_EP_RAW]),
+			  (void *) u->transfer_buffer,
+			  u->transfer_buffer_length,
+			  s2226_read_preview_callback,
+			  urb);
+	(void) usb_submit_urb(u, GFP_ATOMIC);
+	return;
 }
 
 static void s2226_write_vid_callback(struct urb *u)
 {
 	struct s2226_urb *urb;
 	int i;
+
 	urb = (struct s2226_urb *)u->context;
 	urb->ready = 1;
-	urb->dev->write_vid_ready = 1;
-	for (i = 0; urb != &urb->dev->write_vid[i]; i++)
+	urb->dev->d->write_vid_ready = 1;
+	for (i = 0; urb != &urb->dev->d->write_vid[i]; i++)
 		; /* find the index of the urb that completed */
 	dprintk(4, "s2226_write_vid_callback %d\n", i);
-	wake_up(&urb->dev->write_vid_wq);
+	wake_up(&urb->dev->d->write_vid_wq);
 	return;
 }
 
-static ssize_t s2226_write_vid(struct file *file, const char *buffer,
-			       size_t nbytes, loff_t *ppos)
+static ssize_t s2226_write(struct file *file, const char *buffer, size_t nbytes,
+			   loff_t *ppos)
 {
 	int retval;
-	struct s2226_fh *fh = (struct s2226_fh *) file->private_data;
-	struct s2226_dev *dev = (struct s2226_dev *) fh->dev;
+	struct s2226_stream *strm = video_drvdata(file);
 	size_t writesize;
 	int i = 0;
 
 	writesize = (nbytes > MAX_USB_SIZE) ? MAX_USB_SIZE : nbytes;
+
 	if (writesize == 0)
 		return 0;
+	if (strm->type != S2226_STREAM_DECODE)
+		return -EINVAL;
+	if (strm->write_vid[0].buffer == NULL)
+		return -EFAULT;
 	/* find an available urb */
-	while (!dev->write_vid[i].ready) {
+	while (!strm->write_vid[i].ready) {
 		i++;
 		if (i >= WR_URBS) {
 			i = 0;
-			dev->write_vid_ready = 0;
-			retval = wait_event_interruptible_timeout(
-				dev->write_vid_wq,
-				(dev->write_vid_ready != 0),
-				msecs_to_jiffies(5000));
+			strm->write_vid_ready = 0;
+			retval = wait_event_interruptible_timeout(strm->write_vid_wq,
+								  (strm->write_vid_ready != 0),
+								  msecs_to_jiffies(5000));
 			if (retval <= 0) {
-				dev_info(&dev->udev->dev,
-					 "retval %x\n", retval);
+				dprintk(2, "retval %x\n", retval);
 				return retval;
 			}
-			if (!dev->write_vid_ready)
+			if (!strm->write_vid_ready) {
+				dprintk(2, "s2226 write fault\n");
 				return -EFAULT;
+			}
 		}
 	}
-	dprintk(4, "s2226_write_vid: %d %p %d\n", i,
-		dev->write_vid[i].buffer, (int)writesize);
+	dprintk(4, "s2226_write_vid: %d %p %d\n", i, strm->write_vid[i].buffer, (int)writesize);
 
-	if (copy_from_user(dev->write_vid[i].buffer, buffer, writesize)) {
-		dev_err(&dev->udev->dev, "s2226 write video\n");
+	if (copy_from_user(strm->write_vid[i].buffer, buffer, writesize)) {
+		printk(KERN_ERR "s2226 write video\n");
 		return -EFAULT;
 	}
-	if (dev->udev == NULL)
+	if (strm->dev->udev == NULL)
 		return -ENODEV;
-	dev->write_vid[i].ready = 0;
-	usb_fill_bulk_urb(dev->write_vid[i].urb, dev->udev,
-			  usb_sndbulkpipe(dev->udev, dev->ep[INDEX_EP_H264]),
-			  (void *) dev->write_vid[i].buffer,
+	strm->write_vid[i].ready = 0;
+	usb_fill_bulk_urb(strm->write_vid[i].urb, strm->dev->udev,
+			  usb_sndbulkpipe(strm->dev->udev,
+					  strm->dev->ep[INDEX_EP_H264]),
+			  (void *) strm->write_vid[i].buffer,
 			  writesize,
 			  s2226_write_vid_callback,
-			  (void *) &dev->write_vid[i]);
-	retval = usb_submit_urb(dev->write_vid[i].urb, GFP_KERNEL);
-
+			  (void *) &strm->write_vid[i]);
+	retval = usb_submit_urb(strm->write_vid[i].urb, GFP_KERNEL);
 	if (retval) {
-		dev_err(&dev->udev->dev, "failed to submit URB %d\n", retval);
+		printk(KERN_ERR "failed to submit URB[%p] %d\n",
+		       strm->write_vid[i].urb,
+		       retval);
 		return retval;
 	}
-
 	return writesize;
 }
+
 
 
 static int read_interrupt_endpoint(struct s2226_dev *dev, int timeout)
@@ -3073,42 +3020,11 @@ static int write_control_endpoint(struct s2226_dev *dev, int timeout)
 	return retval;
 }
 
-unsigned int s2226_poll(struct file *file, poll_table *wait)
-{
-	struct s2226_fh *fh = (struct s2226_fh *) file->private_data;
-	struct s2226_dev *dev = (struct s2226_dev *) fh->dev;
-	unsigned int mask = 0;
-
-	poll_wait(file, &dev->read_vid_wq, wait);
-	if (dev->read_vid[dev->read_vid_head].ready == 1)
-		mask |= POLLIN | POLLRDNORM;
-	return mask;
-}
-
-static const struct file_operations s2226_vfops = {
-	.owner =    THIS_MODULE,
-	.open =     s2226_open,
-	.compat_ioctl = s2226_ioctl_compat,
-	.unlocked_ioctl = s2226_ioctl_unlocked,
-	.read =     s2226_read_vid,
-	.write =    s2226_write_vid,
-	.release =  s2226_release,
-	.poll =     s2226_poll,
-};
 
 
-#define EXPECTED_IN_EPS  1  /*(depending on board rev, may have 1 or 2 in eps)*/
-#define EXPECTED_OUT_EPS 2  /*the interrupt endpoint is a bulk out ep*/
+#define EXPECTED_IN_EPS  1 /* minimum number */
+#define EXPECTED_OUT_EPS 2
 
-/*
- * usb class driver info in order to get a minor number from the usb core,
- * and to have the device registered with the driver core
- */
-static struct usb_class_driver s2226_class = {
-	.name =         "s2226v%d",
-	.fops =         &s2226_vfops,
-	.minor_base =   USB_S2226_MINOR_BASE,
-};
 static void s2226_init_audio(struct s2226_audio *aud)
 {
 	memset(aud, 0, sizeof(struct s2226_audio));
@@ -3122,14 +3038,13 @@ static int s2226_probe(struct usb_interface *interface,
 	struct s2226_dev *dev = NULL;
 	struct usb_host_interface *iface_desc;
 	struct usb_endpoint_descriptor *endpoint;
-	unsigned char *pmem = NULL;
 	int i;
 	int in_count = 0; /* number of in endpoints */
 	int out_count = 0; /* number of out endpoints */
-	int retval = -ENOMEM;
+	int rc = -ENOMEM;
 	/* required sleep for device to boot.  do not remove */
 	msleep(1150);
-	pr_info("[s2226] %s\n", S2226_DRIVER_VERSION_STRING);
+	pr_info("[s2226] %s\n", S2226_VERSION);
 
 	/* allocate memory for our device state and initialize it to zero */
 	dev = kzalloc(sizeof(*dev), GFP_KERNEL);
@@ -3137,9 +3052,26 @@ static int s2226_probe(struct usb_interface *interface,
 		pr_info("s2226: out of memory");
 		goto error;
 	}
+	/* initialize locks */
+	s2226_mutex_init(&dev->ioctl_lock);
+	s2226_mutex_init(&dev->audlock);
+	s2226_mutex_init(&dev->reslock);
+	s2226_mutex_init(&dev->cmdlock);
+	spin_lock_init(&dev->slock);
+	s2226_mutex_init(&dev->lock);
+	dev->m = &dev->strm[S2226_STREAM_MPEG];
+	dev->p = &dev->strm[S2226_STREAM_PREVIEW];
+	dev->d = &dev->strm[S2226_STREAM_DECODE];
+	dev->m->dev = dev;
+	dev->p->dev = dev;
+	dev->d->dev = dev;
+	dev->m->type = S2226_STREAM_MPEG;
+	dev->p->type = S2226_STREAM_PREVIEW;
+	dev->d->type = S2226_STREAM_DECODE;
 	dev->fpga_ver = -1;
+	dev->cfg_intf = -1;
+	dev->alt_intf = -1;
 
-	kref_init(&dev->kref);
 	s2226_init_audio(&dev->aud);
 	dev->udev = usb_get_dev(interface_to_usbdev(interface));
 	dev->interface = interface;
@@ -3171,92 +3103,50 @@ static int s2226_probe(struct usb_interface *interface,
 	}
 	/* save our data pointer in this interface device */
 	usb_set_intfdata(interface, dev);
-	/* initialize locks */
-	s2226_mutex_init(&dev->ioctl_lock);
-	s2226_mutex_init(&dev->audlock);
-	s2226_mutex_init(&dev->cmdlock);
-	/* we can register the device now, as it is ready */
-	dprintk(4, "before usb register video register intfdata %p\n", dev);
-	retval = usb_register_dev(interface, &s2226_class);
-	dprintk(4, "after usb register video register intfdata %p\n", dev);
-	if (retval) {
-		/* something prevented us from registering this driver */
-		pr_info("s2226drv: Not able to get a minor for this device.");
-		usb_set_intfdata(interface, NULL);
-		goto error;
-	}
-
 	/* let the user know what node this device is now attached to */
 	dprintk(0, "USB 2226 device now attached to USBs2226-%d",
 		interface->minor);
-
 	dev->interrupt_buffer = kmalloc(MAX_USB_INT_SIZE, GFP_KERNEL);
 	if (dev->interrupt_buffer == NULL) {
-		retval = -ENOMEM;
+		rc = -ENOMEM;
 		goto errorUR;
 	}
 	dev->control_buffer = kmalloc(MAX_USB_SIZE, GFP_KERNEL);
 	if (dev->control_buffer == NULL) {
-		retval = -ENOMEM;
+		rc = -ENOMEM;
 		goto errorUR;
 	}
-
-	for (i = 0; i < WR_URBS; i++) {
-		dev->write_vid[i].urb = usb_alloc_urb(0, GFP_KERNEL);
-		if (dev->write_vid[i].urb == NULL) {
-			retval = -ENOMEM;
-			goto errorUR;
-		}
-		dev->write_vid[i].ready = 1;
-		dev->write_vid[i].dev = dev;
-		dev->write_vid[i].buffer = kmalloc(MAX_USB_SIZE, GFP_KERNEL);
-		if (dev->write_vid[i].buffer == NULL) {
-			retval = -ENOMEM;
-			goto errorUR;
-		}
-	}
-
-	for (i = 0; i < RD_URBS; i++) {
-		dev->read_vid[i].urb = usb_alloc_urb(0, GFP_KERNEL);
-		if (dev->read_vid[i].urb == NULL) {
-			retval = -ENOMEM;
-			goto errorUR;
-		}
-		dev->read_vid[i].ready = 0;
-		dev->read_vid[i].dev = dev;
-		dev->read_vid[i].buffer =
-			kmalloc(S2226_RB_PKT_SIZE, GFP_KERNEL);
-		if (dev->read_vid[i].buffer == NULL) {
-			retval = -ENOMEM;
-			goto errorUR;
-		}
-	}
-
 	dev->interrupt_urb = usb_alloc_urb(0, GFP_KERNEL);
 	if (dev->interrupt_urb == NULL) {
-		retval = -ENOMEM;
+		rc = -ENOMEM;
 		goto errorUR;
 	}
 	dev->control_urb = usb_alloc_urb(0, GFP_KERNEL);
 	if (dev->control_urb == NULL) {
-		retval = -ENOMEM;
+		rc = -ENOMEM;
 		goto errorUR;
 	}
-	init_waitqueue_head(&dev->read_vid_wq);
-	init_waitqueue_head(&dev->write_vid_wq);
-	dev->write_vid_ready = 1;
-	kfree(pmem);
+	for (i = 0; i < S2226_MAX_STREAMS; i++) {
+		rc = s2226_allocate_urbs(&dev->strm[i]);
+		if (rc != 0) {
+			rc = -ENOMEM;
+			goto errorUR;
+		}
+	}
+
+	init_waitqueue_head(&dev->d->write_vid_wq);
+	dev->d->write_vid_ready = 1;
 	dev_info(&dev->udev->dev, "s2226 successfully loaded\n");
 	{
 		char buf[64];
 		int siz = 64; /* EP0 is 64 bytes max */
-		retval = s2226_vendor_request(dev,
+		rc = s2226_vendor_request(dev,
 					      0x30,/* FIRMWARE_REV*/
 					      0, 0, /* val, idx*/
 					      buf,
 					      siz,
 					      0); /* bIn */
-		if (retval > 0)
+		if (rc > 0)
 			dprintk(0, "USB firmware version %x.%02x\n",
 				buf[1], buf[0]);
 		else
@@ -3264,12 +3154,11 @@ static int s2226_probe(struct usb_interface *interface,
 		dev->usb_ver = buf[0] + (buf[1] << 8);
 	}
 	s2226_prime_fx2(dev);
-	retval = s2226_set_attr(dev, ATTR_INT_EP_PKTEND, 0);
-
+	rc = s2226_set_attr(dev, ATTR_INT_EP_PKTEND, 0);
 	{
 		int fwver;
-		retval = s2226_get_attr(dev, ATTR_ARM_FW_VERSION, &fwver);
-		if (retval >= 0) {
+		rc = s2226_get_attr(dev, ATTR_ARM_FW_VERSION, &fwver);
+		if (rc >= 0) {
 			dev_info(&dev->udev->dev,
 				 "s2226: ARM fw version: 0x%04x\n",
 				 fwver);
@@ -3277,7 +3166,7 @@ static int s2226_probe(struct usb_interface *interface,
 		} else
 			dev_info(&dev->udev->dev,
 			       "s2226: err getting ARM fw version %d\n",
-			       retval);
+			       rc);
 
 		if (fwver & 0xff000000)
 			dev_info(&dev->udev->dev,
@@ -3288,7 +3177,6 @@ static int s2226_probe(struct usb_interface *interface,
 	}
 	/* set default parameters */
 	s2226_default_params(dev);
-
 	dprintk(4, "before probe done %p\n", dev);
 	dev->h51_mode.gop = 0;
 	dev->h51_mode.vbr = 0;
@@ -3305,54 +3193,35 @@ static int s2226_probe(struct usb_interface *interface,
 	dev->saturation = 0x40;
 	dev->contrast = 0x40;
 	s2226_probe_v4l(dev);
+	s2226_get_fpga_ver(dev);
+	s2226_set_interface(dev, 0, 1, 1);
 	dev_info(&dev->udev->dev, "s2226: probe success\n");
 	return 0;
 errorUR:
-	/* unregister the driver. */
-	usb_deregister_dev(interface, &s2226_class);
 error:
-	kfree(pmem);
-	usb_set_intfdata(interface, NULL);
-	kref_put(&dev->kref, s2226_delete);
+	v4l2_device_unregister(&dev->v4l2_dev);
+	kfree(dev);
 	pr_info("s2226: probe failed\n");
-	return retval;
+	return rc;
 }
-
-
 
 /* disconnect routine.  when board is removed physically or with rmmod */
 static void s2226_disconnect(struct usb_interface *interface)
 {
-	struct s2226_dev *dev = NULL;
+	struct s2226_dev *dev = usb_get_intfdata(interface);
 	int minor = interface->minor;
-	dprintk(4, "s2226_DISCONNECT %d\n", minor);
-	/* lock to prevent s2226_open() from racing s2226_disconnect() */
-	s2226_mutex_lock(&s2226_devices_lock);
-	dev = usb_get_intfdata(interface);
-	/* give back our minor */
-	s2226_mutex_lock(&dev->ioctl_lock);
-	usb_deregister_dev(interface, &s2226_class);
-
-	s2226_mutex_unlock(&dev->ioctl_lock);
-
-	if (dev) {
-		/* to do */
-		/* wake up the read thread in case it is waiting for data */
-		wake_up(&dev->read_vid_wq);
-		/* wake up the write queue */
-		wake_up(&dev->write_vid_wq);
-	} else
-		pr_info("dev null\n");
-
-	dprintk(4, "s2226_DISCONNECT2\n");
-	/* close 2226 board core */
-	dev->udev = NULL;
+	int i;
+	/* wake up the write queue */
+	dprintk(2, "%s\n", __func__);
+	wake_up(&dev->d->write_vid_wq);
+	s2226_mutex_lock(&dev->lock);
 	usb_set_intfdata(interface, NULL);
-	dprintk(4, "get intfdata %p\n", dev);
-	dprintk(4, "s2226_DISCONNECT5\n");
-	/* decrement our usage count */
-	kref_put(&dev->kref, s2226_delete);
-	s2226_mutex_unlock(&s2226_devices_lock);
+	for (i = 0; i < S2226_MAX_STREAMS; i++)
+		video_unregister_device(&dev->strm[i].vdev);
+	v4l2_device_disconnect(&dev->v4l2_dev);
+	dev->udev = NULL;
+	s2226_mutex_unlock(&dev->lock);
+	v4l2_device_put(&dev->v4l2_dev);
 	pr_info("USB s2226 #%d now disconnected", minor);
 }
 
@@ -3370,7 +3239,6 @@ static int __init usb_s2226_init(void)
 {
 	int result;
 	/* register this driver with the USB subsystem */
-	s2226_mutex_init(&s2226_devices_lock);
 	result = usb_register(&s2226_driver);
 	if (result)
 		pr_info("s2226drv: usb_register failed. Error number %d",
@@ -3455,7 +3323,7 @@ static int s2226_reset_board(struct s2226_dev *dev)
 	/* wait for board to come up */
 	msleep(1150);
 	/* board reset, make sure board put back at default interface. */
-	s2226_set_interface(dev, 0, 0);
+	s2226_set_interface(dev, 0, 0, 1);
 	return ret;
 }
 
@@ -3664,7 +3532,6 @@ static int SetAudioMono(struct s2226_dev *dev, int gain, int mute)
 	send_aic33_wr(dev, 79, val);
 	return 0;
 }
-
 
 static int SetAudioHp(struct s2226_dev *dev, int gainL, int gainR,
 		      int muteL, int muteR)
@@ -3975,422 +3842,386 @@ static int s2226_get_fpga_ver(struct s2226_dev *dev)
 	return 0;
 }
 
+
 #define S2226_NORMS		(V4L2_STD_PAL | V4L2_STD_NTSC)
 
 static int s2226_open_v4l(struct file *file)
 {
-	int minor = video_devdata(file)->minor;
-	struct s2226_dev *h, *dev = NULL;
 	struct s2226_fh *fh;
-	struct list_head *list;
-	dprintk(1, "%s\n", __func__);
-
-	if (s2226_mutex_lock_interruptible(&s2226_devices_lock)) {
-		pr_info("s2226drv: could not acquire lock s2226_open\n");
-		return -ERESTARTSYS;
+	struct s2226_stream *strm = video_drvdata(file);
+	int rc;
+	if (strm->type != S2226_STREAM_DECODE) {
+		rc = v4l2_fh_open(file);
+		dprintk(2, "%s: %d\n", __func__, rc);
+		return rc;
 	}
-
-	list_for_each(list, &s2226_devlist) {
-		h = list_entry(list, struct s2226_dev, s2226_devlist);
-		if (h->vdev->minor == minor)
-			dev = h;
-	}
-
-	if (NULL == dev) {
-		pr_info("s2226: openv4l no dev\n");
-		s2226_mutex_unlock(&s2226_devices_lock);
-		return -ENODEV;
-	}
-
-	/* allocate file context data */
+	/* decode stream type */
 	fh = kmalloc(sizeof(struct s2226_fh), GFP_KERNEL);
 	if (NULL == fh) {
-		s2226_mutex_unlock(&s2226_devices_lock);
+		printk(KERN_INFO "s2226: out of memory\n");
 		return -ENOMEM;
 	}
 	memset(fh, 0, sizeof(struct s2226_fh));
-	dprintk(1, "opened dev %p\n", dev);
 	file->private_data = fh;
-	fh->dev = dev;
-	fh->type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-	/* increment our usage count for the device */
-	dev->users++;
-	kref_get(&dev->kref);
-	videobuf_queue_vmalloc_init(&fh->vb_vidq, &s2226_video_qops,
-				    NULL, &dev->slock,
-				    fh->type,
-				    V4L2_FIELD_NONE,
-				    sizeof(struct s2226_buffer), fh
-				    , NULL /* ext_lock */
-		);
-
-
-	s2226_mutex_unlock(&s2226_devices_lock);
+	fh->dev = strm->dev;
+	fh->strm = strm;
 	return 0;
 }
 
 
-static int s2226_release_v4l(struct file *file)
+static int s2226_close(struct file *filp)
 {
-	struct s2226_fh *fh = file->private_data;
-	struct s2226_dev *dev = fh->dev;
 	int i;
 	int res;
-	if (!dev)
-		return -ENODEV;
+	struct s2226_fh *fh;
+	struct s2226_stream *strm = video_drvdata(filp);
+	struct s2226_dev *dev = strm->dev;
 
-	if (s2226_mutex_lock_interruptible(&s2226_devices_lock))
-		return -ERESTARTSYS;
+	if (ovl_check(dev, filp))
+		ovl_free(dev);
 
-	if (fh == NULL) {
-		s2226_mutex_unlock(&s2226_devices_lock);
-		return -ENODEV;
+	if (strm->type != S2226_STREAM_DECODE) {
+		int rc;
+		rc = vb2_fop_release(filp);
+		return rc;
 	}
-	dev = fh->dev;
-	if (dev == NULL) {
-		s2226_mutex_unlock(&s2226_devices_lock);
-		return -ENODEV;
-	}
-
-	dev->users--;
-	for (i = 0; i < WR_URBS; i++) {
-		usb_kill_urb(dev->write_vid[i].urb);
-		dev->write_vid[i].ready = 1;
-	}
-	for (i = 0; i < RD_URBS; i++) {
-		usb_kill_urb(dev->read_vid[i].urb);
-		dev->read_vid[i].ready = 0;
-	}
-	/* turn off stream */
+	fh = filp->private_data;
 	res = res_check(fh);
-	if (res) {
-		if (res & RES_STREAM) {
-			if (dev->h51_state == STREAM_MODE_ENCODE)
-				s2226_stop_encode(dev, 0);
-			videobuf_streamoff(&fh->vb_vidq);
+	if (res & RES_DECODE) {
+		dprintk(2, "stop decode\n");
+		for (i = 0; i < WR_URBS; i++) {
+			usb_kill_urb(strm->write_vid[i].urb);
+			strm->write_vid[i].ready = 1;
 		}
-		res_free(dev, fh, res);
+		(void)  s2226_stop_decode(strm->dev, 0);
+		res_free(strm->dev, fh, RES_DECODE);
 	}
-	videobuf_mmap_free(&fh->vb_vidq);
+	fh = filp->private_data;
 	kfree(fh);
-	s2226_mutex_unlock(&s2226_devices_lock);
-	/* decrement the count on our device */
-	kref_put(&dev->kref, s2226_delete);
 	return 0;
 }
 
-
-static struct v4l2_queryctrl s2226_qctrl[] = {
-	{
-		.id = V4L2_CID_USER_CLASS,
-		.type = V4L2_CTRL_TYPE_INTEGER,
-		.name = "user class",
-		.minimum = 0,
-		.maximum = 0,
-		.step = 0,
-		.default_value = 0,
-		.flags = 0,
-	}, {
-		.id = V4L2_CID_BRIGHTNESS,
-		.type = V4L2_CTRL_TYPE_INTEGER,
-		.name = "Brightness",
-		.minimum = 0,
-		.maximum = 255,
-		.step = 1,
-		.default_value = 0x80,
-		.flags = 0,
-	}, {
-		.id = V4L2_CID_CONTRAST,
-		.type = V4L2_CTRL_TYPE_INTEGER,
-		.name = "Contrast",
-		.minimum = 0,
-		.maximum = 0x7f,
-		.step = 0x1,
-		.default_value = 0x40,
-		.flags = 0,
-	}, {
-		.id = V4L2_CID_SATURATION,
-		.type = V4L2_CTRL_TYPE_INTEGER,
-		.name = "Saturation",
-		.minimum = 0,
-		.maximum = 0x7f,
-		.step = 0x1,
-		.default_value = 0x40,
-		.flags = 0,
-	}, {
-		.id = V4L2_CID_HUE,
-		.type = V4L2_CTRL_TYPE_INTEGER,
-		.name = "Hue",
-		.minimum = -0x40,
-		.maximum = 0x40,
-		.step = 0x1,
-		.default_value = 0,
-		.flags = 0,
-	}, {
-		.id = V4L2_CID_MPEG_CLASS,
-		.type = V4L2_CTRL_TYPE_INTEGER,
-		.name = "MPEG class",
-		.minimum = 0,
-		.maximum = 0,
-		.step = 0,
-		.default_value = 0,
-		.flags = 0,
-	}, {
-		.id = V4L2_CID_MPEG_STREAM_TYPE,
-		.type = V4L2_CTRL_TYPE_INTEGER,
-		.name = "Stream Type",
-		.minimum = V4L2_MPEG_STREAM_TYPE_MPEG2_TS,
-		.maximum = V4L2_MPEG_STREAM_TYPE_MPEG2_TS,
-		.step = 0,
-		.default_value = V4L2_MPEG_STREAM_TYPE_MPEG2_TS,
-		.flags = 0,
-	}, {
-		.id = V4L2_CID_MPEG_AUDIO_SAMPLING_FREQ,
-		.type = V4L2_CTRL_TYPE_INTEGER,
-		.name = "Audio Sampling Frequency",
-		.minimum = V4L2_MPEG_AUDIO_SAMPLING_FREQ_48000,
-		.maximum = V4L2_MPEG_AUDIO_SAMPLING_FREQ_48000,
-		.step = 0,
-		.default_value = V4L2_MPEG_AUDIO_SAMPLING_FREQ_48000,
-		.flags = 0,
-	}, {
-		.id = V4L2_CID_MPEG_AUDIO_ENCODING,
-		.type = V4L2_CTRL_TYPE_INTEGER,
-		.name = "Audio Encoding",
-		.minimum = V4L2_MPEG_AUDIO_ENCODING_LAYER_2,
-		.maximum = V4L2_MPEG_AUDIO_ENCODING_LAYER_2,
-		.step = 0,
-		.default_value = V4L2_MPEG_AUDIO_ENCODING_LAYER_2,
-		.flags = 0,
-	}, {
-		.id = V4L2_CID_MPEG_AUDIO_L2_BITRATE,
-		.type = V4L2_CTRL_TYPE_INTEGER,
-		.name = "Audio Bitrate",
-		.minimum = V4L2_MPEG_AUDIO_L2_BITRATE_128K,
-		.maximum = V4L2_MPEG_AUDIO_L2_BITRATE_256K,
-		.step = 1,
-		.default_value = V4L2_MPEG_AUDIO_L2_BITRATE_256K,
-		.flags = 0,
-	}, {
-		.id = V4L2_CID_MPEG_VIDEO_ENCODING,
-		.type = V4L2_CTRL_TYPE_INTEGER,
-		.name = "Video Encoding",
-		.minimum = V4L2_MPEG_VIDEO_ENCODING_MPEG_4_AVC,
-		.maximum = V4L2_MPEG_VIDEO_ENCODING_MPEG_4_AVC,
-		.step = 0,
-		.default_value = V4L2_MPEG_VIDEO_ENCODING_MPEG_4_AVC,
-		.flags = 0,
-	}, {
-		.id = V4L2_CID_MPEG_VIDEO_GOP_CLOSURE,
-		.type = V4L2_CTRL_TYPE_INTEGER,
-		.name = "GOP closure",
-		.minimum = 0,
-		.maximum = 1,
-		.step = 1,
-		.default_value = 0,
-		.flags = 0,
-	}, {
-		.id = V4L2_CID_MPEG_VIDEO_BITRATE,
-		.type = V4L2_CTRL_TYPE_INTEGER,
-		.name = "Video Bitrate",
-		.minimum = S2226_MIN_VBITRATE * 1000,
-		.maximum = S2226_MAX_VBITRATE * 1000,
-		.step = 0,
-		.default_value = S2226_DEF_VBITRATE * 1000,
-		.flags = 0,
-	}
-};
-
-static int frame_count;
-
-static int s2226_got_data(struct s2226_dev *dev, int urb_idx)
+static int s2226_got_data(struct s2226_stream *strm, unsigned char *tbuf, unsigned int tlen)
 {
-	struct s2226_dmaqueue *dma_q = &dev->vidq;
 	struct s2226_buffer *buf;
 	unsigned long flags = 0;
 	char *vbuf;
-	struct timeval ts;
-	dprintk(4, "s2226_got_data: %p\n", &dma_q);
-	spin_lock_irqsave(&dev->slock, flags);
-
-	if (list_empty(&dma_q->active)) {
-		dprintk(3, "No active queue to serve\n");
-		goto unlock;
-	}
-	buf = list_entry(dma_q->active.next,
-			 struct s2226_buffer, vb.queue);
-
-
-	list_del(&buf->vb.queue);
-	do_gettimeofday(&buf->vb.ts);
-	dprintk(100, "[%p/%d] wakeup\n", buf, buf->vb.i);
-	vbuf = videobuf_to_vmalloc(&buf->vb);
-	if (vbuf == NULL) {
-		dev_err(&dev->udev->dev, "%s vbuf error\n", __func__);
-		goto unlock;
-	}
-
-	memcpy(vbuf, dev->read_vid[urb_idx].buffer, S2226_RB_PKT_SIZE);
-	buf->vb.size = S2226_RB_PKT_SIZE;
-	do_gettimeofday(&ts);
-	buf->vb.ts = ts;
-	frame_count++;
-	buf->vb.field_count += 2;
-	buf->vb.state = VIDEOBUF_DONE;
-	wake_up(&buf->vb.done);
-	dprintk(2, "wakeup [buf/i] [%p/%d]\n", buf, buf->vb.i);
-unlock:
-	spin_unlock_irqrestore(&dev->slock, flags);
-
-	return 0;
-}
-
-/*
- * Videobuf operations
- */
-
-static int buffer_setup(struct videobuf_queue *vq, unsigned int *count,
-			unsigned int *size)
-{
-	*size = S2226_BUFFER_SIZE;
-
-	if (0 == *count)
-		*count = S2226_DEF_BUFS;
-
-	while (*size * (*count) > vid_limit * 1024 * 1024)
-		(*count)--;
-
-	dprintk(4, "buffer setup %d\n", *count);
-	return 0;
-}
-
-
-static void free_buffer(struct videobuf_queue *vq, struct s2226_buffer *buf)
-{
+	int rc = 0;
 	dprintk(4, "%s\n", __func__);
-	videobuf_vmalloc_free(&buf->vb);
-	buf->vb.state = VIDEOBUF_NEEDS_INIT;
-}
-
-static int buffer_prepare(struct videobuf_queue *vq, struct videobuf_buffer *vb,
-			  enum v4l2_field field)
-{
-	struct s2226_buffer *buf = container_of(vb, struct s2226_buffer, vb);
-	int rc;
-	dprintk(4, "%s, field=%d\n", __func__, field);
-
-	if (0 != buf->vb.baddr && buf->vb.bsize < buf->vb.size) {
-		dprintk(0, "invalid buffer prepare\n");
-		return -EINVAL;
+	spin_lock_irqsave(&strm->qlock, flags);
+	if (list_empty(&strm->buf_list)) {
+		dprintk(0, "No active queue to serve\n");
+		rc = -1;
+		goto unlock;
 	}
-
-	buf->vb.width = 720;/*fh->width;*/
-	buf->vb.height = 480;/*fh->height;*/
-	buf->vb.field = field;
-
-	if (VIDEOBUF_NEEDS_INIT == buf->vb.state) {
-		rc = videobuf_iolock(vq, &buf->vb, NULL);
-		if (rc < 0)
-			goto fail;
+	buf = list_entry(strm->buf_list.next,
+			 struct s2226_buffer, list);
+	list_del(&buf->list);
+	vbuf = vb2_plane_vaddr(&buf->vb, 0);
+	if (vbuf == NULL) {
+		printk(KERN_ERR "%s vbuf error\n", __func__);
+		rc = -ENOMEM;
+		goto unlock;
 	}
+	memcpy(vbuf, tbuf, tlen);
+	buf->vb.v4l2_buf.length = tlen;
+	v4l2_get_timestamp(&buf->vb.v4l2_buf.timestamp);
+	buf->vb.v4l2_buf.sequence = strm->framecount++;
+	vb2_buffer_done(&buf->vb, VB2_BUF_STATE_DONE);
 
-	buf->vb.state = VIDEOBUF_PREPARED;
-	return 0;
-fail:
-	free_buffer(vq, buf);
+	dprintk(2, "wakeup [buf/i] [%p/%d]\n", buf, 0);
+	rc = 0;
+unlock:
+	spin_unlock_irqrestore(&strm->qlock, flags);
 	return rc;
 }
 
-static void buffer_queue(struct videobuf_queue *vq, struct videobuf_buffer *vb)
+
+static int s2226_got_preview_data(struct s2226_stream *strm, unsigned char *tbuf, unsigned int tlen)
 {
-	struct s2226_buffer *buf = container_of(vb, struct s2226_buffer, vb);
-	struct s2226_fh *fh = vq->priv_data;
-	struct s2226_dev *dev = fh->dev;
-	struct s2226_dmaqueue *vidq = &dev->vidq;
-	dprintk(4, "%s\n", __func__);
-	buf->vb.state = VIDEOBUF_QUEUED;
-	list_add_tail(&buf->vb.queue, &vidq->active);
-}
+	struct s2226_buffer *buf;
+	unsigned long flags = 0;
+	char *vbuf;
+	int i;
+	if (tlen == 2) {
+		if ((tbuf[0] == INTTYPE_ASYNCEVENT) &&
+		    (tbuf[1] == ASYNCEVENT_RAWDATA)) {
+			strm->m_sync = 0;
+			strm->m_copied = 0;
+			strm->m_lines = 0;
+			strm->m_pos = 0;
+			return 0;
+		}
+		if ((tbuf[0] == INTTYPE_ASYNCEVENT) &&
+		    (tbuf[1] == ASYNCEVENT_RAWDATA_END)) {
+			strm->m_sync = 1;
+			return 0;
+		}
+	}
 
-static void buffer_release(struct videobuf_queue *vq,
-			   struct videobuf_buffer *vb)
-{
-	struct s2226_buffer *buf = container_of(vb, struct s2226_buffer, vb);
-	dprintk(4, "%s\n", __func__);
-	free_buffer(vq, buf);
-}
+	if (strm->m_sync)
+		return 0;
 
-static struct videobuf_queue_ops s2226_video_qops = {
-	.buf_setup = buffer_setup,
-	.buf_prepare = buffer_prepare,
-	.buf_queue = buffer_queue,
-	.buf_release = buffer_release,
-};
+	spin_lock_irqsave(&strm->qlock, flags);
+	if (list_empty(&strm->buf_list)) {
+		dprintk(3, "No active queue to serve\n");
+		spin_unlock_irqrestore(&strm->qlock, flags);
+		return -1;
+	}
+	buf = list_entry(strm->buf_list.next,
+			 struct s2226_buffer, list);
+	vbuf = vb2_plane_vaddr(&buf->vb, 0);
 
-
-static int res_get(struct s2226_dev *dev, struct s2226_fh *fh, int res)
-{
-	/* is it free? */
-	dprintk(4, "res get\n");
-	s2226_mutex_lock(&dev->reslock);
-	dprintk(2, "resources %x, res %x\n", dev->resources, res);
-	if (dev->resources & res) {
-		/* no, someone else uses it */
-		s2226_mutex_unlock(&dev->reslock);
+	if (vbuf == NULL) {
+		printk(KERN_ERR "%s vbuf error\n", __func__);
+		spin_unlock_irqrestore(&strm->qlock, flags);
+		return -ENOMEM;
+	}
+	if (strm->m_sync) {
+		for (i = 0; i < tlen; i++) {
+			if (tbuf[i] == 0x22 && tbuf[i+1] == 0x26 && tbuf[i+2] == 0xda && tbuf[i+3] == 0x4a) {
+				strm->m_sync = 0;
+				break;
+			}
+		}
+		strm->m_copied = 0;
+		strm->m_lines = 0;
+		strm->m_pos = 0;
+		spin_unlock_irqrestore(&strm->qlock, flags);
+		dprintk(2, "%x %x %x %X: msync %d, len %d\n", tbuf[0], tbuf[1], tbuf[2], tbuf[3], strm->m_sync,
+		       tlen);
 		return 0;
 	}
-	/* it's free, grab it */
-	dev->resources |= res;
-	fh->resources |= res;
-	dprintk(1, "s2226: res: get\n");
-	s2226_mutex_unlock(&dev->reslock);
-	return 1;
+
+	if (strm->m_pos + tlen >= vb2_plane_size(&buf->vb, 0))
+		tlen = vb2_plane_size(&buf->vb, 0) - strm->m_pos;
+
+	memcpy(vbuf + strm->m_pos, tbuf, tlen);
+	strm->m_pos += tlen;
+	if (strm->m_pos < vb2_get_plane_payload(&buf->vb, 0)) {
+		spin_unlock_irqrestore(&strm->qlock, flags);
+		return 0;
+	}
+	strm->m_sync = 1;
+	list_del(&buf->list);
+	spin_unlock_irqrestore(&strm->qlock, flags);
+	buf->vb.v4l2_buf.length = vb2_get_plane_payload(&buf->vb, 0);
+	v4l2_get_timestamp(&buf->vb.v4l2_buf.timestamp);
+	strm->framecount++;
+	buf->vb.v4l2_buf.sequence = strm->framecount;
+	vb2_buffer_done(&buf->vb, VB2_BUF_STATE_DONE);
+	dprintk(2, "wakeup [buf/i] [%p/%d]\n", buf, 0);
+	return 0;
 }
 
-static int res_locked(struct s2226_dev *dev, struct s2226_fh *fh)
+
+/* videobuf2 info */
+static int queue_setup(struct vb2_queue *vq, const struct v4l2_format *fmt,
+		       unsigned int *nbuffers, unsigned int *nplanes,
+		       unsigned int sizes[], void *alloc_ctxs[])
 {
-	dprintk(4, "res locked\n");
-	return dev->resources;
+	struct s2226_stream *strm = vb2_get_drv_priv(vq);
+
+	if (*nbuffers < S2226_MIN_BUFS)
+		*nbuffers = S2226_MIN_BUFS;
+	*nplanes = 1;
+	switch (strm->type) {
+	case S2226_STREAM_MPEG:
+		sizes[0] = S2226_MPEG_BUFFER_SIZE;
+		break;
+	case S2226_STREAM_PREVIEW:
+		sizes[0] = strm->width * strm->height * 2;
+		break;
+	}
+	dprintk(2, "buffer setup size: %d\n", sizes[0]);
+	return 0;
 }
 
-static int res_check(struct s2226_fh *fh)
+
+static int buffer_prepare(struct vb2_buffer *vb)
 {
-	dprintk(4, "res check %d\n", fh->resources);
-	return fh->resources;
+	struct s2226_buffer *buf = container_of(vb, struct s2226_buffer, vb);
+	struct s2226_stream *strm = vb2_get_drv_priv(vb->vb2_queue);
+	int w = strm->width;
+	int h = strm->height;
+	unsigned long size;
+	dprintk(2, "%s: h %d, w %d\n", __func__, h, w);
+	switch (strm->type) {
+	case S2226_STREAM_MPEG:
+		size = S2226_MPEG_BUFFER_SIZE;
+		break;
+	case S2226_STREAM_PREVIEW:
+		size = w * h * 2;
+		break;
+	default:
+		return -EINVAL;
+	}
+	if (vb2_plane_size(vb, 0) < size) {
+		dprintk(2, "invalid buffer prepare\n");
+		return -EINVAL;
+	}
+	vb2_set_plane_payload(&buf->vb, 0, size);
+	return 0;
 }
 
-
-static void res_free(struct s2226_dev *dev, struct s2226_fh *fh, int res)
+static void buffer_queue(struct vb2_buffer *vb)
 {
-	dprintk(4, "res free\n");
-	s2226_mutex_lock(&dev->reslock);
-	dev->resources &= ~res;
-	fh->resources &= ~res;
-	s2226_mutex_unlock(&dev->reslock);
-	dprintk(4, "res: put\n");
+	struct s2226_buffer *buf = container_of(vb, struct s2226_buffer, vb);
+	struct s2226_stream *strm = vb2_get_drv_priv(vb->vb2_queue);
+	unsigned long flags = 0;
+	dprintk(4, "%s\n", __func__);
+	spin_lock_irqsave(&strm->qlock, flags);
+	list_add_tail(&buf->list, &strm->buf_list);
+	spin_unlock_irqrestore(&strm->qlock, flags);
 }
+
+
+static int stop_streaming(struct vb2_queue *vq);
+static int start_streaming(struct vb2_queue *vq, unsigned int count);
+
+static struct vb2_ops s2226_vb2_ops = {
+	.queue_setup = queue_setup,
+	.buf_prepare = buffer_prepare,
+	.buf_queue = buffer_queue,
+	.start_streaming = start_streaming,
+	.stop_streaming = stop_streaming,
+	.wait_prepare = vb2_ops_wait_prepare,
+	.wait_finish = vb2_ops_wait_finish,
+};
 
 static int vidioc_querycap(struct file *file, void *priv,
 			   struct v4l2_capability *cap)
 {
-	struct s2226_fh *fh = file->private_data;
-	struct s2226_dev *dev = fh->dev;
-	memset(cap, 0, sizeof(*cap));
+	struct s2226_stream *strm = video_drvdata(file);
+	struct s2226_dev *dev = strm->dev;
 
+	memset(cap, 0, sizeof(*cap));
 	strlcpy(cap->driver, "s2226", sizeof(cap->driver));
-	strlcpy(cap->card, "s2226", sizeof(cap->card));
+	switch (strm->type) {
+	case S2226_STREAM_MPEG:
+		strlcpy(cap->card, "Sensoray Model 2226 H.264", sizeof(cap->card));
+		break;
+	case S2226_STREAM_PREVIEW:
+		strlcpy(cap->card, "Sensoray Model 2226 Preview", sizeof(cap->card));
+		break;
+	case S2226_STREAM_DECODE:
+		strlcpy(cap->card, "Sensoray Model 2226 Decode", sizeof(cap->card));
+		break;
+	}
+
 	strlcpy(cap->bus_info, dev_name(&dev->udev->dev),
 		sizeof(cap->bus_info));
+
 	usb_make_path(dev->udev, cap->bus_info, sizeof(cap->bus_info));
-	cap->version = 0;/*TODO S2226_VERSION;*/
-	cap->capabilities = V4L2_CAP_VIDEO_CAPTURE | V4L2_CAP_STREAMING;
+
+	cap->device_caps = V4L2_CAP_VIDEO_CAPTURE | V4L2_CAP_STREAMING | V4L2_CAP_READWRITE;
+	cap->capabilities = cap->device_caps | V4L2_CAP_DEVICE_CAPS;
 	return 0;
 }
+
+
+struct s2226_fmt {
+	char *name;
+	u32 fourcc;
+	int depth;
+	u32 flags;
+	int type;
+};
+
+/* formats */
+static const struct s2226_fmt formats_mpeg[] = {
+	{
+		.name = "MPEGTS_H264",
+		.fourcc = V4L2_PIX_FMT_MPEG,
+		.depth = 8,
+		.flags = V4L2_FMT_FLAG_COMPRESSED,
+		.type = V4L2_BUF_TYPE_VIDEO_CAPTURE,
+	}
+};
+
+static const struct s2226_fmt formats_preview[] = {
+	{
+		.name = "4:2:2, packed, UYVY",
+		.fourcc = V4L2_PIX_FMT_UYVY,
+		.depth = 16,
+		.flags = 0,
+		.type = V4L2_BUF_TYPE_VIDEO_CAPTURE,
+	},
+};
+
+static void s2226_max_height_width(int input, int *h, int *w)
+{
+	switch (input) {
+	case INPUT_COMP0_480I:
+	case INPUT_COMP1_480I:
+	case INPUT_SVIDEO0_480I:
+	case INPUT_SVIDEO1_480I:
+	case INPUT_H51_SD_480I:
+	case INPUT_SDI_480I:
+	case INPUT_SDI_480I_CB:
+		*w = 480;
+		*h = 640;
+		return;
+	case INPUT_SDI_576I:
+	case INPUT_SDI_576I_CB:
+	case INPUT_COMP0_576I:
+	case INPUT_COMP1_576I:
+	case INPUT_SVIDEO0_576I:
+	case INPUT_SVIDEO1_576I:
+	case INPUT_H51_SD_576I:
+		*w = 704;
+		*h = 576;
+		return;
+	case INPUT_SDI_720P_50:
+	case INPUT_SDI_720P_50_CB:
+	case INPUT_H51_HD_720P_50:
+	case INPUT_SDI_720P_5994:
+	case INPUT_SDI_720P_60:
+	case INPUT_SDI_720P_60_CB:
+	case INPUT_SDI_720P_5994_CB:
+	case INPUT_H51_HD_720P_60:
+	case INPUT_H51_HD_720P_5994:
+	case INPUT_SDI_720P_24:
+	case INPUT_SDI_720P_24_CB:
+	case INPUT_H51_HD_720P_24:
+	case INPUT_SDI_720P_2398:
+	case INPUT_SDI_720P_2398_CB:
+	case INPUT_H51_HD_720P_2398:
+		*w = 1280;
+		*h = 720;
+		return;
+	case INPUT_SDI_1080I_50:
+	case INPUT_SDI_1080I_50_CB:
+	case INPUT_H51_HD_1080I_50:
+	case INPUT_SDI_1080I_5994:
+	case INPUT_SDI_1080I_5994_CB:
+	case INPUT_H51_HD_1080I_5994:
+	case INPUT_SDI_1080I_60:
+	case INPUT_SDI_1080I_60_CB:
+	case INPUT_H51_HD_1080I_60:
+	case INPUT_SDI_1080P_24:
+	case INPUT_SDI_1080P_24_CB:
+	case INPUT_H51_HD_1080P_24:
+	case INPUT_SDI_1080P_2398:
+	case INPUT_SDI_1080P_2398_CB:
+	case INPUT_H51_HD_1080P_2398:
+		*w = 1920;
+		*h = 1080;
+		return;
+	default:
+		*w = 640;
+		*h = 480;
+		return;
+	}
+}
+
 
 static int vidioc_enum_fmt_vid_cap(struct file *file, void *priv,
 				   struct v4l2_fmtdesc *f)
 {
 	int index = 0;
+	struct s2226_stream *strm = video_drvdata(file);
+	const struct s2226_fmt *formats;
 	dprintk(4, "%s 2226\n", __func__);
 	if (f == NULL)
 		return -EINVAL;
@@ -4399,290 +4230,477 @@ static int vidioc_enum_fmt_vid_cap(struct file *file, void *priv,
 
 	if (index >= 1)
 		return -EINVAL;
-	f->index = index;
-	f->type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-	f->flags = V4L2_FMT_FLAG_COMPRESSED;
-	strlcpy(f->description, "MPEGTS_H264", sizeof(f->description));
-	f->pixelformat = V4L2_PIX_FMT_MPEG;
+
+	formats = (strm->type != S2226_STREAM_PREVIEW) ? formats_mpeg : formats_preview;
+	strlcpy(f->description, formats[index].name, sizeof(f->description));
+	f->pixelformat = formats[index].fourcc;
+	f->flags = formats[index].flags;
+	f->type = formats[index].type;
 	return 0;
 }
 
 static int vidioc_g_fmt_vid_cap(struct file *file, void *priv,
 				struct v4l2_format *f)
 {
+	struct s2226_stream *strm = video_drvdata(file);
 	f->type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-	f->fmt.pix.width = 720;/*fh->height;*/
-	f->fmt.pix.height = 480;/*fh->height;*/
 	f->fmt.pix.field = V4L2_FIELD_NONE;
-	f->fmt.pix.pixelformat = V4L2_PIX_FMT_MPEG;
-	f->fmt.pix.bytesperline = 0;
-	f->fmt.pix.sizeimage = S2226_BUFFER_SIZE;
-	f->fmt.pix.colorspace = 0;/*V4L2_COLORSPACE_SMPTE170M ??? */
+	f->fmt.pix.pixelformat = strm->fourcc;
+	switch (strm->type) {
+	case S2226_STREAM_PREVIEW:
+		f->fmt.pix.field = V4L2_FIELD_INTERLACED;
+		f->fmt.pix.width = strm->width;
+		f->fmt.pix.height = strm->height;
+		f->fmt.pix.bytesperline = strm->width*2;
+		f->fmt.pix.sizeimage = strm->width*strm->height*2;
+		f->fmt.pix.colorspace = V4L2_COLORSPACE_SMPTE170M;
+		break;
+	case S2226_STREAM_MPEG:
+	case S2226_STREAM_DECODE:
+		f->fmt.pix.bytesperline = 0;
+		f->fmt.pix.sizeimage = S2226_MPEG_BUFFER_SIZE;
+		f->fmt.pix.colorspace = 0;
+		break;
+	default:
+		return -EINVAL;
+	}
 	f->fmt.pix.priv = 0;
 	f->type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
 	dprintk(4, "%s", __func__);
 	return 0;
 }
 
+
+
 static int vidioc_try_fmt_vid_cap(struct file *file, void *priv,
 				  struct v4l2_format *f)
 {
-	struct s2226_fh *fh = priv;
-	struct s2226_dev *dev = fh->dev;
+	struct s2226_stream *strm = video_drvdata(file);
+	struct s2226_dev *dev = strm->dev;
 	int is_ntsc;
+	int is_mpeg;
+	int maxh;
+	int maxw;
+	const struct s2226_fmt *formats;
 
+	formats = (strm->type != S2226_STREAM_PREVIEW) ? formats_mpeg : formats_preview;
+	is_mpeg = (strm->type == S2226_STREAM_PREVIEW) ? 0 : 1;
 	is_ntsc = !dev->v4l_is_pal;
 	dprintk(4, "%s\n", __func__);
 
-	if (f->fmt.pix.pixelformat != V4L2_PIX_FMT_MPEG)
+	if (f->fmt.pix.pixelformat != V4L2_PIX_FMT_MPEG &&
+	    f->fmt.pix.pixelformat != V4L2_PIX_FMT_UYVY) {
+		dprintk(1, "%s wrong format %x %x\n", __func__,
+			f->fmt.pix.pixelformat, V4L2_PIX_FMT_UYVY);
 		return -EINVAL;
-	f->fmt.pix.pixelformat = V4L2_PIX_FMT_MPEG;
-	f->fmt.pix.field = V4L2_FIELD_NONE;
-	f->fmt.pix.bytesperline = 0;
-	f->fmt.pix.sizeimage = S2226_BUFFER_SIZE;
-	switch (dev->v4l_input) {
-	case S2226_INPUT_COMPOSITE_0:
-	case S2226_INPUT_COMPOSITE_1:
-	case S2226_INPUT_SVIDEO_0:
-	case S2226_INPUT_SVIDEO_1:
-	case S2226_INPUT_SD_COLORBARS:
-		f->fmt.pix.width = 720;
-		f->fmt.pix.height = is_ntsc ? 480 : 576;
-		break;
-	case S2226_INPUT_720P_COLORBARS:
-	case S2226_INPUT_SDI_720P_5994:
-	case S2226_INPUT_SDI_720P_60:
-	case S2226_INPUT_SDI_720P_50:
-		f->fmt.pix.width = 1920;
-		f->fmt.pix.height = 720;
-		break;
-	case S2226_INPUT_1080I_COLORBARS:
-	case S2226_INPUT_SDI_1080I_5994:
-	case S2226_INPUT_SDI_1080I_60:
-	case S2226_INPUT_SDI_1080I_50:
-		f->fmt.pix.width = 1920;
-		f->fmt.pix.height = 1080;
-		break;
+	}
+	f->fmt.pix.pixelformat = formats[0].fourcc;
+	if (!is_mpeg) {
+		int w, h;
+		w = f->fmt.pix.width;
+		h = f->fmt.pix.height;
+		s2226_max_height_width(dev->cur_input, &maxh, &maxw);
+		if (h >= maxh)
+			h = maxh;
+		if (w >= maxw)
+			w = maxw;
+		if (f->fmt.pix.field == V4L2_FIELD_ANY) {
+			if (IS_PROG_INPUT(dev->cur_input))
+				f->fmt.pix.field = V4L2_FIELD_TOP;
+			else if (h <= 288)
+				f->fmt.pix.field = V4L2_FIELD_TOP;
+			else
+				f->fmt.pix.field = V4L2_FIELD_INTERLACED;
+		}
+		f->fmt.pix.pixelformat = V4L2_PIX_FMT_UYVY;
+		f->fmt.pix.height = h;
+		f->fmt.pix.width = w;
+		f->fmt.pix.bytesperline = w * 2;
+		f->fmt.pix.sizeimage = w * h * 2;
+		f->fmt.pix.colorspace = V4L2_COLORSPACE_SMPTE170M;
+		f->fmt.pix.priv = 0;
+	} else {
+		f->fmt.pix.field = V4L2_FIELD_NONE;
+		f->fmt.pix.bytesperline = 0;
+		f->fmt.pix.sizeimage = S2226_MPEG_BUFFER_SIZE;
+		if (strm->type == S2226_STREAM_MPEG) {
+			switch (dev->v4l_input) {
+			case S2226_INPUT_COMPOSITE_0:
+			case S2226_INPUT_COMPOSITE_1:
+			case S2226_INPUT_SVIDEO_0:
+			case S2226_INPUT_SVIDEO_1:
+			case S2226_INPUT_SD_COLORBARS:
+				f->fmt.pix.width = 720;
+				f->fmt.pix.height = is_ntsc ? 480 : 576;
+				break;
+			case S2226_INPUT_720P_COLORBARS:
+			case S2226_INPUT_SDI_720P_5994:
+			case S2226_INPUT_SDI_720P_60:
+			case S2226_INPUT_SDI_720P_50:
+			case S2226_INPUT_SDI_720P_24:
+			case S2226_INPUT_SDI_720P_2398:
+				f->fmt.pix.width = 1920;
+				f->fmt.pix.height = 720;
+				break;
+			case S2226_INPUT_1080I_COLORBARS:
+			case S2226_INPUT_SDI_1080I_5994:
+			case S2226_INPUT_SDI_1080I_60:
+			case S2226_INPUT_SDI_1080I_50:
+			case S2226_INPUT_SDI_1080P_24:
+			case S2226_INPUT_SDI_1080P_2398:
+				f->fmt.pix.width = 1920;
+				f->fmt.pix.height = 1080;
+				break;
+			}
+		} else {
+			/* decode */
+			switch (dev->v4l_input) {
+			case S2226_DECODE_480I:
+			case S2226_DECODE_576I:
+				f->fmt.pix.width = 720;
+				f->fmt.pix.height = is_ntsc ? 480 : 576;
+				break;
+			case S2226_DECODE_720P_24:
+			case S2226_DECODE_720P_5994:
+			case S2226_DECODE_720P_2398:
+			case S2226_DECODE_720P_60:
+			case S2226_DECODE_720P_50:
+				f->fmt.pix.width = 1920;
+				f->fmt.pix.height = 720;
+				break;
+			case S2226_DECODE_1080P_24:
+			case S2226_DECODE_1080P_2398:
+			case S2226_DECODE_1080I_60:
+			case S2226_DECODE_1080I_5994:
+			case S2226_DECODE_1080I_50:
+				f->fmt.pix.width = 1920;
+				f->fmt.pix.height = 1080;
+				break;
+			}
+		}
 	}
 	return 0;
 }
 
 /* MPEG capture device so this really has no meaning.
-   There is no scalar.  accept format specified, but width and height
+   There is no scalar.  accept format specified, 0but width and height
    of image will be fixed in the MPEG stream. */
 static int vidioc_s_fmt_vid_cap(struct file *file, void *priv,
 				struct v4l2_format *f)
 {
+	struct s2226_stream *strm = video_drvdata(file);
+	struct s2226_dev *dev = strm->dev;
 	struct s2226_fh *fh = priv;
 	int ret;
+	int single = 0;
+
 	ret = vidioc_try_fmt_vid_cap(file, fh, f);
 	if (ret < 0)
 		return ret;
+
+	if (strm->type != S2226_STREAM_PREVIEW)
+		return 0;
+
+	strm->width = f->fmt.pix.width;
+	strm->height = f->fmt.pix.height;
+	strm->fourcc = f->fmt.pix.pixelformat;
+
+	s2226_set_attr(dev, ATTR_SCALE_X, f->fmt.pix.width);
+	s2226_set_attr(dev, ATTR_SCALE_Y, f->fmt.pix.height);
+
+	if (IS_PROG_INPUT(dev->cur_input))
+		single = 1;
+	if (f->fmt.pix.field != V4L2_FIELD_INTERLACED)
+		single = 1;
+	s2226_set_attr(dev, ATTR_SCALE_SINGLE, single);
+/*	s2226_set_attr(dev, ATTR_SCALED_OUTPUT, 0); */
+	s2226_set_attr(dev, ATTR_MPEG_SCALER, 1);
+	dprintk(1, "setting x scale %d, yscale %d\n", f->fmt.pix.width, f->fmt.pix.height);
 	return 0;
 }
 
-static int vidioc_reqbufs(struct file *file, void *priv,
-			  struct v4l2_requestbuffers *p)
+
+static int s2226_allocate_urbs(struct s2226_stream *strm)
 {
-	int rc;
-	struct s2226_fh *fh = priv;
-	dprintk(4, "%s\n", __func__);
-	rc = videobuf_reqbufs(&fh->vb_vidq, p);
-	return rc;
-}
-
-static int vidioc_querybuf(struct file *file, void *priv, struct v4l2_buffer *p)
-{
-	int rc;
-	struct s2226_fh *fh = priv;
-	dprintk(4, "%s\n", __func__);
-	rc = videobuf_querybuf(&fh->vb_vidq, p);
-	return rc;
-}
-
-static int vidioc_qbuf(struct file *file, void *priv, struct v4l2_buffer *p)
-{
-	int rc;
-	struct s2226_fh *fh = priv;
-	dprintk(4, "%s\n", __func__);
-	rc = videobuf_qbuf(&fh->vb_vidq, p);
-	return rc;
-}
-
-static int vidioc_dqbuf(struct file *file, void *priv, struct v4l2_buffer *p)
-{
-	int rc;
-	struct s2226_fh *fh = priv;
-	dprintk(4, "%s\n", __func__);
-	rc = videobuf_dqbuf(&fh->vb_vidq, p, file->f_flags & O_NONBLOCK);
-	return rc;
-}
-
-#ifdef CONFIG_VIDEO_V4L1_COMPAT
-static int vidioc_cgmbuf(struct file *file, void *priv, struct video_mbuf *mbuf)
-{
-	struct s2226_fh *fh = priv;
-	dprintk(4, "%s\n", __func__);
-	return videobuf_cgmbuf(&fh->vb_vidq, mbuf, 8);
-}
-#endif
-
-static int s2226_new_v4l_input(struct s2226_dev *dev, int inp);
-
-static int vidioc_streamon(struct file *file, void *priv, enum v4l2_buf_type i)
-{
-	int res;
-	struct s2226_fh *fh = priv;
-	struct s2226_dev *dev = fh->dev;
-	dprintk(4, "%s\n", __func__);
-
-	if (fh->type != V4L2_BUF_TYPE_VIDEO_CAPTURE) {
-		dev_warn(&dev->udev->dev, "invalid fh type0\n");
-		return -EINVAL;
-	}
-	if (i != fh->type) {
-		dev_warn(&dev->udev->dev, "invalid fh type1\n");
-		return -EINVAL;
-	}
-	if (!res_get(dev, fh, RES_STREAM)) {
-		dev_info(&dev->udev->dev, "stream busy\n");
-		return -EBUSY;
-	}
-	res = videobuf_streamon(&fh->vb_vidq);
-	if (res == 0) {
-		s2226_set_attr(dev, ATTR_INPUT, dev->cur_input);
-		if (dev->fpga_ver <= 0) {
-			s2226_get_fpga_ver(dev);
-			s2226_new_v4l_input(dev, dev->v4l_input);
+	int i;
+	int rsize;
+	if (strm == NULL)
+		return -ENOMEM;
+	rsize = (strm->type != S2226_STREAM_PREVIEW) ? S2226_MPEG_URB_SIZE : S2226_PREVIEW_URB_SIZE;
+	if (strm->type == S2226_STREAM_DECODE) {
+		/* allocate MPEG stream write URBS */
+		for (i = 0; i < WR_URBS; i++) {
+			strm->write_vid[i].urb = usb_alloc_urb(0, GFP_KERNEL);
+			if (strm->write_vid[i].urb == NULL)
+				return -ENOMEM;
+			strm->write_vid[i].ready = 1;
+			strm->write_vid[i].dev = strm->dev;
+			strm->write_vid[i].strm = strm;
+			strm->write_vid[i].buffer = kmalloc(MAX_USB_SIZE, GFP_KERNEL);
+			if (strm->write_vid[i].buffer == NULL)
+				return -ENOMEM;
 		}
-		s2226_start_encode(dev, 0, S2226_CONTEXT_V4L);
-	} else {
-		res_free(dev, fh, RES_STREAM);
+		return 0;
 	}
-	return res;
+	for (i = 0; i < RD_URBS; i++) {
+		strm->read_vid[i].urb = usb_alloc_urb(0, GFP_KERNEL);
+		if (strm->read_vid[i].urb == NULL)
+			return -ENOMEM;
+		strm->read_vid[i].ready = 0;
+		strm->read_vid[i].dev = strm->dev;
+		strm->read_vid[i].strm = strm;
+		strm->read_vid[i].buffer = kmalloc(rsize, GFP_KERNEL);
+		if (strm->read_vid[i].buffer == NULL)
+			return -ENOMEM;
+	}
+	return 0;
 }
 
-static int vidioc_streamoff(struct file *file, void *priv, enum v4l2_buf_type i)
+static int start_streaming(struct vb2_queue *vq, unsigned int count)
 {
-	struct s2226_fh *fh = priv;
-	struct s2226_dev *dev = fh->dev;
+	struct s2226_stream *strm = vb2_get_drv_priv(vq);
+	struct s2226_dev *dev = strm->dev;
+	dprintk(0, "%s: type: %d\n", __func__, strm->type);
+	switch (strm->type) {
+	case S2226_STREAM_MPEG:
+		s2226_start_encode(dev, 0, S2226_CONTEXT_V4L);
+		break;
+	case S2226_STREAM_PREVIEW:
+		s2226_start_preview(dev, 0, S2226_CONTEXT_V4L);
+		break;
+	default:
+		return -EINVAL;
+	}
+	strm->active = 1;
+	strm->framecount = 0;
+	strm->m_pos = 0;
+	return 0;
+}
 
+static int s2226_stop_urbs(struct s2226_stream *strm, int bwrite)
+{
+	int i;
+	strm->active = 0;
+	if (!bwrite) {
+		for (i = 0; i < RD_URBS; i++) {
+			usb_kill_urb(strm->read_vid[i].urb);
+			strm->read_vid[i].ready = 0;
+		}
+	} else {
+		for (i = 0; i < WR_URBS; i++) {
+			usb_kill_urb(strm->write_vid[i].urb);
+			strm->write_vid[i].ready = 0;
+		}
+	}
+	return 0;
+}
+
+static int stop_streaming(struct vb2_queue *vq)
+{
+	struct s2226_stream *strm = vb2_get_drv_priv(vq);
+	struct s2226_dev *dev = strm->dev;
+	unsigned long flags = 0;
+	struct s2226_buffer *buf, *node;
 	dprintk(5, "%s\n", __func__);
-	if (fh->type != V4L2_BUF_TYPE_VIDEO_CAPTURE) {
-		dev_warn(&dev->udev->dev, "invalid fh type0\n");
-		return -EINVAL;
-	}
-	if (i != fh->type) {
-		dev_warn(&dev->udev->dev, "invalid type\n");
-		return -EINVAL;
-	}
-	if (dev->h51_state == STREAM_MODE_ENCODE)
+	switch (strm->type) {
+	case S2226_STREAM_MPEG:
 		s2226_stop_encode(dev, 0);
-	videobuf_streamoff(&fh->vb_vidq);
-	res_free(dev, fh, RES_STREAM);
+		s2226_stop_urbs(strm, 0);
+		break;
+	case S2226_STREAM_PREVIEW:
+		s2226_stop_preview(dev, 0);
+		s2226_stop_urbs(strm, 0);
+		break;
+	}
+	spin_lock_irqsave(&strm->qlock, flags);
+	list_for_each_entry_safe(buf, node, &strm->buf_list, list) {
+		list_del(&buf->list);
+		vb2_buffer_done(&buf->vb, VB2_BUF_STATE_ERROR);
+		dprintk(2, "[%p/%d] done\n",
+			buf, buf->vb.v4l2_buf.index);
+	}
+	spin_unlock_irqrestore(&strm->qlock, flags);
 	return 0;
 }
 
 static int s2226_new_v4l_input(struct s2226_dev *dev, int inp)
 {
+	int rc = 0;
 	switch (inp) {
 	case S2226_INPUT_COMPOSITE_0:
-		s2226_new_input(dev, dev->v4l_is_pal ?
-				INPUT_COMP0_576I : INPUT_COMP0_480I);
+		rc = s2226_new_input(dev, dev->v4l_is_pal ?
+				     INPUT_COMP0_576I : INPUT_COMP0_480I);
 		break;
 	case S2226_INPUT_SVIDEO_0:
-		s2226_new_input(dev, dev->v4l_is_pal ?
-				INPUT_SVIDEO0_576I : INPUT_SVIDEO0_480I);
+		rc = s2226_new_input(dev, dev->v4l_is_pal ?
+				     INPUT_SVIDEO0_576I : INPUT_SVIDEO0_480I);
 		break;
 	case S2226_INPUT_COMPOSITE_1:
-		s2226_new_input(dev, dev->v4l_is_pal ?
-				INPUT_COMP1_576I : INPUT_COMP1_480I);
+		rc = s2226_new_input(dev, dev->v4l_is_pal ?
+				     INPUT_COMP1_576I : INPUT_COMP1_480I);
 		break;
 	case S2226_INPUT_SVIDEO_1:
-		s2226_new_input(dev, dev->v4l_is_pal ?
-				INPUT_SVIDEO1_576I : INPUT_SVIDEO1_480I);
+		rc = s2226_new_input(dev, dev->v4l_is_pal ?
+				     INPUT_SVIDEO1_576I : INPUT_SVIDEO1_480I);
 		break;
 	case S2226_INPUT_SDI_SD:
-		s2226_new_input(dev, dev->v4l_is_pal ?
-				INPUT_SDI_576I : INPUT_SDI_480I);
+		rc = s2226_new_input(dev, dev->v4l_is_pal ?
+				     INPUT_SDI_576I : INPUT_SDI_480I);
 		break;
 	case S2226_INPUT_SD_COLORBARS:
-		s2226_new_input(dev, dev->v4l_is_pal ?
-				INPUT_SDI_576I_CB : INPUT_SDI_480I_CB);
+		rc = s2226_new_input(dev, dev->v4l_is_pal ?
+				     INPUT_SDI_576I_CB : INPUT_SDI_480I_CB);
 		break;
 	case S2226_INPUT_720P_COLORBARS:
-		s2226_new_input(dev, dev->v4l_is_pal ?
-				INPUT_SDI_720P_50_CB : INPUT_SDI_720P_60_CB);
+		rc = s2226_new_input(dev, dev->v4l_is_pal ?
+				     INPUT_SDI_720P_50_CB : INPUT_SDI_720P_60_CB);
 		break;
 	case S2226_INPUT_1080I_COLORBARS:
-		s2226_new_input(dev, dev->v4l_is_pal ?
-				INPUT_SDI_1080I_50_CB : INPUT_SDI_1080I_60_CB);
+		rc = s2226_new_input(dev, dev->v4l_is_pal ?
+				     INPUT_SDI_1080I_50_CB : INPUT_SDI_1080I_60_CB);
 		break;
 	case S2226_INPUT_SDI_720P_5994:
-		s2226_new_input(dev, INPUT_SDI_720P_5994);
+		rc = s2226_new_input(dev, INPUT_SDI_720P_5994);
 		dev->v4l_is_pal = 0;
 		break;
 	case S2226_INPUT_SDI_720P_60:
-		s2226_new_input(dev, INPUT_SDI_720P_60);
+		rc = s2226_new_input(dev, INPUT_SDI_720P_60);
 		dev->v4l_is_pal = 0;
 		break;
 	case S2226_INPUT_SDI_1080I_50:
-		s2226_new_input(dev, INPUT_SDI_1080I_50);
+		rc = s2226_new_input(dev, INPUT_SDI_1080I_50);
 		dev->v4l_is_pal = 1;
 		break;
 	case S2226_INPUT_SDI_1080I_5994:
-		s2226_new_input(dev, INPUT_SDI_1080I_5994);
+		rc = s2226_new_input(dev, INPUT_SDI_1080I_5994);
 		dev->v4l_is_pal = 0;
 		break;
 	case S2226_INPUT_SDI_1080I_60:
-		s2226_new_input(dev, INPUT_SDI_1080I_60);
+		rc = s2226_new_input(dev, INPUT_SDI_1080I_60);
 		dev->v4l_is_pal = 0;
 		break;
 	case S2226_INPUT_SDI_720P_50:
-		s2226_new_input(dev, INPUT_SDI_720P_50);
+		rc = s2226_new_input(dev, INPUT_SDI_720P_50);
 		dev->v4l_is_pal = 1;
 		break;
 	case S2226_INPUT_SDI_720P_24:
-		s2226_new_input(dev, INPUT_SDI_720P_24);
+		rc = s2226_new_input(dev, INPUT_SDI_720P_24);
 		dev->v4l_is_pal = 0;
 		break;
 	case S2226_INPUT_SDI_720P_2398:
-		s2226_new_input(dev, INPUT_SDI_720P_2398);
+		rc = s2226_new_input(dev, INPUT_SDI_720P_2398);
 		dev->v4l_is_pal = 1;
 		break;
 	case S2226_INPUT_SDI_1080P_24:
-		s2226_new_input(dev, INPUT_SDI_1080P_24);
+		rc = s2226_new_input(dev, INPUT_SDI_1080P_24);
 		dev->v4l_is_pal = 0;
 		break;
 	case S2226_INPUT_SDI_1080P_2398:
-		s2226_new_input(dev, INPUT_SDI_1080P_2398);
+		rc = s2226_new_input(dev, INPUT_SDI_1080P_2398);
 		dev->v4l_is_pal = 1;
 		break;
 	default:
 		return -EINVAL;
 	}
+	if (rc != 0)
+		return rc;
 	dev->v4l_input = inp;
-	return 0;
+	return rc;
+}
+
+
+
+static int s2226_new_v4l_input_decode(struct s2226_dev *dev, int inp)
+{
+	int rc = 0;
+	dprintk(2, "%s\n", __func__);
+	switch (inp) {
+	case S2226_DECODE_480I:
+		rc = s2226_new_input(dev, INPUT_H51_SD_480I);
+		break;
+	case S2226_DECODE_576I:
+		rc = s2226_new_input(dev, INPUT_H51_SD_576I);
+		break;
+	case S2226_DECODE_1080I_60:
+		rc = s2226_new_input(dev, INPUT_H51_HD_1080I_60);
+		break;
+	case S2226_DECODE_1080I_5994:
+		rc = s2226_new_input(dev, INPUT_H51_HD_1080I_5994);
+		break;
+	case S2226_DECODE_1080I_50:
+		rc = s2226_new_input(dev, INPUT_H51_HD_1080I_50);
+		break;
+	case S2226_DECODE_1080P_24:
+		rc = s2226_new_input(dev, INPUT_H51_HD_1080P_24);
+		break;
+	case S2226_DECODE_1080P_2398:
+		rc = s2226_new_input(dev, INPUT_H51_HD_1080P_2398);
+		break;
+	case S2226_DECODE_720P_60:
+		rc = s2226_new_input(dev, INPUT_H51_HD_720P_60);
+		break;
+	case S2226_DECODE_720P_5994:
+		rc = s2226_new_input(dev, INPUT_H51_HD_720P_5994);
+		break;
+	case S2226_DECODE_720P_50:
+		rc = s2226_new_input(dev, INPUT_H51_HD_720P_50);
+		break;
+	case S2226_DECODE_720P_24:
+		rc = s2226_new_input(dev, INPUT_H51_HD_720P_24);
+		break;
+	case S2226_DECODE_720P_2398:
+		rc = s2226_new_input(dev, INPUT_H51_HD_720P_2398);
+		break;
+	default:
+		return -EINVAL;
+	}
+	if (rc != 0)
+		return rc;
+	dev->v4l_input = inp;
+	return rc;
 }
 
 static int vidioc_g_std(struct file *file, void *priv, v4l2_std_id *i)
 {
-	struct s2226_fh *fh = priv;
-	struct s2226_dev *dev = fh->dev;
+	struct s2226_stream *strm = video_drvdata(file);
+	struct s2226_dev *dev = strm->dev;
 	*i = dev->current_norm;
 	return 0;
 }
 
+
+static int s2226_anystream_busy(struct s2226_dev *dev)
+{
+	int i;
+	for (i = 0; i < S2226_MAX_STREAMS; i++)
+		if (vb2_is_streaming(&dev->strm[i].vb_vidq))
+			return 1;
+	return 0;
+}
+
+
+
 static int vidioc_s_std(struct file *file, void *priv, v4l2_std_id _i)
 {
 	v4l2_std_id *i = &_i;
-	struct s2226_fh *fh = priv;
-	struct s2226_dev *dev = fh->dev;
+	struct s2226_stream *strm = video_drvdata(file);
+	struct s2226_dev *dev = strm->dev;
 	int ret = 0;
-	if (res_locked(fh->dev, fh) & RES_STREAM) {
-		dprintk(1, "can't change standard after started\n");
+
+	if (strm->type == S2226_STREAM_DECODE)
+		return 0;
+
+	/* if standard not being changed, just return */
+	if ((*i & V4L2_STD_NTSC) && (dev->current_norm == V4L2_STD_NTSC))
+		return 0;
+	else if ((*i & V4L2_STD_PAL) && (dev->current_norm == V4L2_STD_PAL))
+		return 0;
+
+	if (s2226_anystream_busy(dev)) {
+		dprintk(1, "streaming on this on other stream. busy\n");
 		return -EBUSY;
 	}
+
 	if (*i & V4L2_STD_NTSC) {
 		switch (dev->v4l_input) {
 		case S2226_INPUT_SDI_1080I_50:
@@ -4697,8 +4715,7 @@ static int vidioc_s_std(struct file *file, void *priv, v4l2_std_id _i)
 			break;
 		}
 		dev->current_norm = V4L2_STD_NTSC;
-	}
-	if (*i & V4L2_STD_PAL) {
+	} else if (*i & V4L2_STD_PAL) {
 		switch (dev->v4l_input) {
 		case S2226_INPUT_SDI_1080I_5994:
 		case S2226_INPUT_SDI_1080I_60:
@@ -4714,7 +4731,9 @@ static int vidioc_s_std(struct file *file, void *priv, v4l2_std_id _i)
 			break;
 		}
 		dev->current_norm = V4L2_STD_PAL;
-	}
+	} else
+		return -EINVAL;
+
 	dev->v4l_is_pal = (*i & V4L2_STD_PAL) ? 1 : 0;
 	/* change input based on new standard */
 	ret = s2226_new_v4l_input(dev, dev->v4l_input);
@@ -4722,9 +4741,63 @@ static int vidioc_s_std(struct file *file, void *priv, v4l2_std_id _i)
 	return ret;
 }
 
+static int vidioc_enum_input_decode(struct file *file, void *priv,
+			     struct v4l2_input *inp)
+{
+	if (inp->index >= S2226_DECODE_MAX)
+		return -EINVAL;
+	inp->type = V4L2_INPUT_TYPE_CAMERA;
+	inp->std = S2226_NORMS;
+	inp->status = 0;
+	switch (inp->index) {
+	case S2226_DECODE_480I:
+		strlcpy(inp->name, "Decode 480I(NTSC)", sizeof(inp->name));
+		break;
+	case S2226_DECODE_576I:
+		strlcpy(inp->name, "Decode 576I(PAL)", sizeof(inp->name));
+		break;
+	case S2226_DECODE_1080I_60:
+		strlcpy(inp->name, "Decode 1080I(60Hz)", sizeof(inp->name));
+		break;
+	case S2226_DECODE_1080I_5994:
+		strlcpy(inp->name, "Decode 1080I(59.94Hz)", sizeof(inp->name));
+		break;
+	case S2226_DECODE_1080I_50:
+		strlcpy(inp->name, "Decode 1080I(50Hz)", sizeof(inp->name));
+		break;
+	case S2226_DECODE_1080P_24:
+		strlcpy(inp->name, "Decode 1080P(24Hz)", sizeof(inp->name));
+		break;
+	case S2226_DECODE_1080P_2398:
+		strlcpy(inp->name, "Decode 1080P(23.98Hz)", sizeof(inp->name));
+		break;
+	case S2226_DECODE_720P_60:
+		strlcpy(inp->name, "Decode 720P(60Hz)", sizeof(inp->name));
+		break;
+	case S2226_DECODE_720P_5994:
+		strlcpy(inp->name, "Decode 720P(59.94Hz)", sizeof(inp->name));
+		break;
+	case S2226_DECODE_720P_50:
+		strlcpy(inp->name, "Decode 720P(50Hz)", sizeof(inp->name));
+		break;
+	case S2226_DECODE_720P_24:
+		strlcpy(inp->name, "Decode 720P(24Hz)", sizeof(inp->name));
+		break;
+	case S2226_DECODE_720P_2398:
+		strlcpy(inp->name, "Decode 720P(23.98Hz)", sizeof(inp->name));
+		break;
+	}
+	/*inp->status =  (status & 0x01) ? 0 : V4L2_IN_ST_NO_SIGNAL; */
+	return 0;
+}
+
 static int vidioc_enum_input(struct file *file, void *priv,
 			     struct v4l2_input *inp)
 {
+	struct s2226_stream *strm = video_drvdata(file);
+
+	if (strm->type == S2226_STREAM_DECODE)
+		return vidioc_enum_input_decode(file, priv, inp);
 	if (inp->index >= S2226_INPUT_MAX)
 		return -EINVAL;
 	inp->type = V4L2_INPUT_TYPE_CAMERA;
@@ -4812,8 +4885,9 @@ static int vidioc_enum_input(struct file *file, void *priv,
 
 static int vidioc_g_input(struct file *file, void *priv, unsigned int *i)
 {
-	struct s2226_fh *fh = file->private_data;
-	struct s2226_dev *dev = fh->dev;
+	struct s2226_stream *strm = video_drvdata(file);
+	struct s2226_dev *dev = strm->dev;
+
 	*i = dev->v4l_input;
 	dprintk(4, "g_input\n");
 	return 0;
@@ -4821,19 +4895,57 @@ static int vidioc_g_input(struct file *file, void *priv, unsigned int *i)
 
 static int vidioc_s_input(struct file *file, void *priv, unsigned int i)
 {
-	struct s2226_fh *fh = file->private_data;
-	struct s2226_dev *dev = fh->dev;
-	dprintk(4, "s_input %d\n", i);
-	if (i >= S2226_INPUT_MAX)
+	struct s2226_stream *strm = video_drvdata(file);
+	struct s2226_dev *dev = strm->dev;
+	struct s2226_fh *fh = priv;
+	int rc;
+
+	dprintk(2, "%s: %d type %d\n", __func__, i, strm->type);
+	if (i >= S2226_INPUT_MAX) {
+		dprintk(2, "EINVAL\n");
 		return -EINVAL;
-	s2226_new_v4l_input(dev, i);
-	return 0;
+	}
+	/* we don't set the input if any device streams are running */
+	if (vb2_is_streaming(&dev->m->vb_vidq)) {
+		/* If the input is same as existing, we don't need
+		   to reset it.  We don't do this in all cases
+		   because we may want to physically reset the input
+		   on the device if it is not streaming.
+		*/
+		if (i == dev->v4l_input && !dev->is_decode)
+			return 0;
+		dprintk(2, "eBUSY m\n");
+		return -EBUSY;
+	}
+	if (vb2_is_streaming(&dev->p->vb_vidq)) {
+		/* if input is same as existing, don't need
+		   to reset it */
+		if (i == dev->v4l_input && !dev->is_decode)
+			return 0;
+		dprintk(2, "eBUSY p\n");
+		return -EBUSY;
+	}
+	if (res_locked(fh->dev, fh) & RES_DECODE) {
+		dprintk(1, "stream busy, can't set input, decoding\n");
+		return -EBUSY;
+	}
+
+	dprintk(0, "new v4l input %d\n", i);
+	if (strm->type == S2226_STREAM_DECODE)
+		rc = s2226_new_v4l_input_decode(dev, i);
+	else
+		rc = s2226_new_v4l_input(dev, i);
+
+	dprintk(2, "%s return %d\n", __func__, rc);
+	return rc;
 }
+
 
 static int vidioc_enumaudio(struct file *file, void *priv,
 			    struct v4l2_audio *aud)
 {
 	int idx;
+
 	idx = aud->index;
 	if (idx >= S2226_AUDIOINPUT_MAX)
 		return -EINVAL;
@@ -4857,8 +4969,8 @@ static int vidioc_enumaudio(struct file *file, void *priv,
 static int vidioc_g_audio(struct file *file, void *priv,
 			  struct v4l2_audio *aud)
 {
-	struct s2226_fh *fh = file->private_data;
-	struct s2226_dev *dev = fh->dev;
+	struct s2226_stream *strm = video_drvdata(file);
+	struct s2226_dev *dev = strm->dev;
 	memset(aud, 0, sizeof(struct v4l2_audio));
 	switch (dev->cur_audiompeg) {
 	case S2226_AUDIOINPUT_LINE:
@@ -4875,11 +4987,13 @@ static int vidioc_g_audio(struct file *file, void *priv,
 	return 0;
 }
 
+
 static int vidioc_s_audio(struct file *file, void *priv,
 			  const struct v4l2_audio *aud)
 {
-	struct s2226_fh *fh = file->private_data;
-	struct s2226_dev *dev = fh->dev;
+	struct s2226_stream *strm = video_drvdata(file);
+	struct s2226_dev *dev = strm->dev;
+
 	if (aud->index >= S2226_AUDIOINPUT_MAX)
 		return -EINVAL;
 	dev->cur_audiompeg = aud->index;
@@ -4887,12 +5001,20 @@ static int vidioc_s_audio(struct file *file, void *priv,
 	return 0;
 }
 
-
-
 /* --- controls ---------------------------------------------- */
-static int mpeg_queryctrl(u32 id, struct v4l2_queryctrl *ctrl)
+
+static int vidioc_queryctrl(struct file *file, void *priv,
+			    struct v4l2_queryctrl *ctrl)
 {
-	int i;
+	struct s2226_stream *strm = video_drvdata(file);
+	static const u32 user_ctrls[] = {
+		V4L2_CID_USER_CLASS,
+		V4L2_CID_BRIGHTNESS,
+		V4L2_CID_CONTRAST,
+		V4L2_CID_SATURATION,
+		V4L2_CID_HUE,
+		0
+	};
 	/* must be in increasing order */
 	static const u32 mpeg_ctrls[] = {
 		V4L2_CID_MPEG_CLASS,
@@ -4905,246 +5027,344 @@ static int mpeg_queryctrl(u32 id, struct v4l2_queryctrl *ctrl)
 		V4L2_CID_MPEG_VIDEO_BITRATE,
 		0
 	};
+
 	static const u32 *ctrl_classes[] = {
-		mpeg_ctrls,
+		user_ctrls,
+		NULL,
 		NULL
 	};
+#define DEF_BRIGHT 0x80
+#define DEF_CONTRAST 0x40
+#define DEF_SATURATION 0x40
+#define DEF_HUE 0
+	int old_id;
+	if (strm->type != S2226_STREAM_PREVIEW)
+		ctrl_classes[1] = mpeg_ctrls;
 
-	/* The ctrl may already contain the queried i2c controls,
-	 * query the mpeg controls if the existing ctrl id is
-	 * greater than the next mpeg ctrl id.
-	 */
-	id = v4l2_ctrl_next(ctrl_classes, id);
-	if (id >= ctrl->id && ctrl->name[0])
-		return 0;
-
-	memset(ctrl, 0, sizeof(*ctrl));
-	ctrl->id = id;
-
-	for (i = 0; i < ARRAY_SIZE(s2226_qctrl); i++)
-		if (ctrl->id && ctrl->id == s2226_qctrl[i].id) {
-			/* don't just copy.  use query fill to set the V4L name
-			   correctly based on kernel function */
-			v4l2_ctrl_query_fill(ctrl,
-					     s2226_qctrl[i].minimum,
-					     s2226_qctrl[i].maximum,
-					     s2226_qctrl[i].step,
-					     s2226_qctrl[i].default_value);
-			return 0;
-		}
-
-	return -EINVAL;
+	old_id = ctrl->id;
+	ctrl->id = v4l2_ctrl_next(ctrl_classes, old_id);
+	switch (ctrl->id) {
+	case V4L2_CID_USER_CLASS:
+	case V4L2_CID_MPEG_CLASS:
+		v4l2_ctrl_query_fill(ctrl, 0, 0, 0, 0);
+		break;
+	case V4L2_CID_BRIGHTNESS:
+		v4l2_ctrl_query_fill(ctrl, 0, 255, 1, DEF_BRIGHT);
+		break;
+	case V4L2_CID_CONTRAST:
+		v4l2_ctrl_query_fill(ctrl, 0, 0x7f, 1, DEF_CONTRAST);
+		break;
+	case V4L2_CID_SATURATION:
+		v4l2_ctrl_query_fill(ctrl, 0, 0x7f, 1, DEF_SATURATION);
+		break;
+	case V4L2_CID_HUE:
+		v4l2_ctrl_query_fill(ctrl, -0x40, 0x40, 1, DEF_HUE);
+		break;
+	case V4L2_CID_MPEG_STREAM_TYPE:
+		v4l2_ctrl_query_fill(ctrl,
+				     V4L2_MPEG_STREAM_TYPE_MPEG2_TS,
+				     V4L2_MPEG_STREAM_TYPE_MPEG2_TS, 1,
+				     V4L2_MPEG_STREAM_TYPE_MPEG2_TS);
+		break;
+	case V4L2_CID_MPEG_AUDIO_SAMPLING_FREQ:
+		v4l2_ctrl_query_fill(ctrl,
+				     V4L2_MPEG_AUDIO_SAMPLING_FREQ_48000,
+				     V4L2_MPEG_AUDIO_SAMPLING_FREQ_48000, 1,
+				     V4L2_MPEG_AUDIO_SAMPLING_FREQ_48000);
+		break;
+	case V4L2_CID_MPEG_AUDIO_ENCODING:
+		v4l2_ctrl_query_fill(ctrl,
+				     V4L2_MPEG_AUDIO_ENCODING_LAYER_2,
+				     V4L2_MPEG_AUDIO_ENCODING_LAYER_2, 1,
+				     V4L2_MPEG_AUDIO_ENCODING_LAYER_2);
+		break;
+	case V4L2_CID_MPEG_AUDIO_L2_BITRATE:
+		v4l2_ctrl_query_fill(ctrl,
+				     V4L2_MPEG_AUDIO_L2_BITRATE_128K,
+				     V4L2_MPEG_AUDIO_L2_BITRATE_256K,
+				     1,
+				     V4L2_MPEG_AUDIO_L2_BITRATE_256K);
+		break;
+	case V4L2_CID_MPEG_VIDEO_ENCODING:
+		v4l2_ctrl_query_fill(ctrl,
+				     V4L2_MPEG_VIDEO_ENCODING_MPEG_4_AVC,
+				     V4L2_MPEG_VIDEO_ENCODING_MPEG_4_AVC, 1,
+				     V4L2_MPEG_VIDEO_ENCODING_MPEG_4_AVC);
+		break;
+	case V4L2_CID_MPEG_VIDEO_GOP_CLOSURE:
+		v4l2_ctrl_query_fill(ctrl,
+				     0,
+				     1, 1,
+				     0);
+		break;
+	default:
+		dprintk(1, "%s: v4l2_ctrl_next returned %x\n", __func__, ctrl->id);
+		ctrl->id = old_id;
+		return -EINVAL;
+	}
+	return 0;
 }
 
-
-static int vidioc_queryctrl(struct file *file, void *priv,
-			    struct v4l2_queryctrl *qc)
-{
-	int id;
-	int i;
-	id = qc->id;
-	for (i = 0; i < ARRAY_SIZE(s2226_qctrl); i++)
-		if (qc->id && qc->id == s2226_qctrl[i].id) {
-			memcpy(qc, &(s2226_qctrl[i]), sizeof(*qc));
-			return 0;
-		}
-
-	if (id & V4L2_CTRL_FLAG_NEXT_CTRL || qc->name[0] == 0)
-		return mpeg_queryctrl(id, qc);
-	return -EINVAL;
-}
 
 static int vidioc_querymenu(struct file *file, void *priv,
 			    struct v4l2_querymenu *qmenu)
 {
+	switch (qmenu->id) {
+/*	case V4L2_CID_MPEG_STREAM_TYPE:*/
+	case V4L2_CID_MPEG_VIDEO_ENCODING:
+		if (qmenu->index == V4L2_MPEG_VIDEO_ENCODING_MPEG_4_AVC) {
+			strlcpy(qmenu->name, "H.264(AVC)", sizeof(qmenu->name));
+			return 0;
+		} else if (qmenu->index < V4L2_MPEG_VIDEO_ENCODING_MPEG_4_AVC)
+			memset(qmenu->name, 0, sizeof(qmenu->name));
+		break;
+	case V4L2_CID_MPEG_AUDIO_ENCODING:
+		/* only support AAC or None */
+		if (qmenu->index == V4L2_MPEG_AUDIO_ENCODING_LAYER_2)
+			strlcpy(qmenu->name, "MP2", sizeof(qmenu->name));
+		else
+			memset(qmenu->name, 0, sizeof(qmenu->name));
+		return 0;
+	case V4L2_CID_MPEG_VIDEO_ASPECT:
+		if (qmenu->index == V4L2_MPEG_VIDEO_ASPECT_1x1) {
+			strlcpy(qmenu->name, "None", sizeof(qmenu->name));
+			return 0;
+		}
+		break;
+	case V4L2_CID_MPEG_AUDIO_MODE:
+		if ((qmenu->index != V4L2_MPEG_AUDIO_MODE_STEREO) &&
+		    (qmenu->index != V4L2_MPEG_AUDIO_MODE_MONO)) {
+			memset(qmenu->name, 0, sizeof(qmenu->name));
+			return 0;
+		}
+	}
 	return v4l2_ctrl_query_menu(qmenu, NULL, NULL);
 }
 
-static int vidioc_g_ctrl(struct file *file, void *priv,
-			 struct v4l2_control *ctrl)
+static int vidioc_try_ext_ctrls(struct file *file, void *priv,
+				struct v4l2_ext_controls *ctrls)
 {
-	struct s2226_fh *fh = file->private_data;
-	struct s2226_dev *dev = fh->dev;
-
-	switch (ctrl->id) {
-	case V4L2_CID_MPEG_STREAM_TYPE:
-		ctrl->value = V4L2_MPEG_STREAM_TYPE_MPEG2_TS;
-		break;
-	case V4L2_CID_MPEG_VIDEO_ENCODING:
-		ctrl->value = V4L2_MPEG_VIDEO_ENCODING_MPEG_4_AVC;
-		break;
-	case V4L2_CID_MPEG_VIDEO_GOP_CLOSURE:
-		ctrl->value = dev->closed_gop;
-		break;
-	case V4L2_CID_MPEG_VIDEO_BITRATE:
-		ctrl->value = dev->h51_mode.vBitrate * 1000;
-		break;
-	case V4L2_CID_MPEG_AUDIO_ENCODING:
-		ctrl->value = V4L2_MPEG_AUDIO_ENCODING_LAYER_2;
-		break;
-	case V4L2_CID_MPEG_AUDIO_SAMPLING_FREQ:
-		ctrl->value = V4L2_MPEG_AUDIO_SAMPLING_FREQ_48000;
-		break;
-	case V4L2_CID_MPEG_AUDIO_L2_BITRATE:
-		switch (dev->h51_mode.aBitrate) {
-		case 128:
-			ctrl->value = V4L2_MPEG_AUDIO_L2_BITRATE_128K;
+	struct v4l2_ext_control *ctrl = ctrls->controls;
+	int i;
+	/* for invalid controls, clamp or set them to default value */
+	for (i = 0; i < ctrls->count; i++, ctrl++) {
+		switch (ctrl->id) {
+		case V4L2_CID_BRIGHTNESS:
+			if (ctrl->value < 0)
+				ctrl->value = 0;
+			else if (ctrl->value > 255)
+				ctrl->value = 255;
 			break;
-		case 160:
-			ctrl->value = V4L2_MPEG_AUDIO_L2_BITRATE_160K;
+		case V4L2_CID_CONTRAST:
+		case V4L2_CID_SATURATION:
+			if (ctrl->value < 0)
+				ctrl->value = 0;
+			else if (ctrl->value > 0x7f)
+				ctrl->value = 0x7f;
 			break;
-		case 192:
-			ctrl->value = V4L2_MPEG_AUDIO_L2_BITRATE_192K;
+		case V4L2_CID_HUE:
+			if (ctrl->value < -0x40)
+				ctrl->value = -0x40;
+			else if (ctrl->value > 0x40)
+				ctrl->value = 0x40;
 			break;
-		case 224:
-			ctrl->value = V4L2_MPEG_AUDIO_L2_BITRATE_224K;
+		case V4L2_CID_AUDIO_BALANCE:
+			if (ctrl->value < -100)
+				ctrl->value = -100;
+			else if (ctrl->value > 100)
+				ctrl->value = 100;
 			break;
-		case 256:
-			ctrl->value = V4L2_MPEG_AUDIO_L2_BITRATE_256K;
+		case V4L2_CID_MPEG_STREAM_TYPE:
+			ctrl->value = V4L2_MPEG_STREAM_TYPE_MPEG2_TS;
+			break;
+		case V4L2_CID_MPEG_AUDIO_ENCODING:
+			ctrl->value = V4L2_MPEG_AUDIO_ENCODING_LAYER_2;
+			break;
+		case V4L2_CID_MPEG_AUDIO_MODE:
+			ctrl->value = V4L2_MPEG_AUDIO_MODE_STEREO;
+			break;
+#if 0
+		case V4L2_CID_MPEG_VIDEO_GOP_CLOSURE:
+			if (ctrl->value != 0)
+				ctrl->value = 1;
+			break;
+#endif
+		case V4L2_CID_MPEG_VIDEO_BITRATE:
+			if (ctrl->value < S2226_MIN_VBITRATE * 1000)
+				ctrl->value = S2226_MIN_VBITRATE * 1000;
+			else if (ctrl->value > S2226_MAX_VBITRATE * 1000)
+				ctrl->value = S2226_MAX_VBITRATE * 1000;
+			else
+				ctrl->value -= ctrl->value % 100000;
+			break;
+#if 0
+		case V4L2_CID_MPEG_VIDEO_BITRATE_MODE:
+			if (ctrl->value != V4L2_MPEG_VIDEO_BITRATE_MODE_CBR)
+				ctrl->value = V4L2_MPEG_VIDEO_BITRATE_MODE_VBR;
+			break;
+#endif
+		case V4L2_CID_MPEG_VIDEO_ENCODING:
+			ctrl->value = V4L2_MPEG_VIDEO_ENCODING_MPEG_4_AVC;
 			break;
 		default:
-			dev_info(&dev->udev->dev,
-				 "unknown audio bitrate specified.\n");
-			break;
+			ctrls->error_idx = i;
+			return -EINVAL;
 		}
-		break;
-	case V4L2_CID_BRIGHTNESS:
-		ctrl->value = dev->brightness;
-		break;
-	case V4L2_CID_CONTRAST:
-		ctrl->value = dev->contrast;
-		break;
-	case V4L2_CID_SATURATION:
-		ctrl->value = dev->saturation;
-		break;
-	case V4L2_CID_HUE:
-		ctrl->value = dev->hue;
-		break;
-	default:
-		return -EINVAL;
 	}
 	return 0;
-
 }
 
-static int vidioc_s_ctrl(struct file *file, void *priv,
-			 struct v4l2_control *ctrl)
+static int vidioc_g_ext_ctrls(struct file *file, void *priv,
+			      struct v4l2_ext_controls *ctrls)
+{
+	struct s2226_stream *strm = video_drvdata(file);
+	struct s2226_dev *dev = strm->dev;
+	struct v4l2_ext_control *ctrl = ctrls->controls;
+	int i;
+
+	for (i = 0; i < ctrls->count; i++, ctrl++) {
+		switch (ctrl->id) {
+		case V4L2_CID_MPEG_STREAM_TYPE:
+			ctrl->value = V4L2_MPEG_STREAM_TYPE_MPEG2_TS;
+			break;
+		case V4L2_CID_MPEG_VIDEO_ENCODING:
+			ctrl->value = V4L2_MPEG_VIDEO_ENCODING_MPEG_4_AVC;
+			break;
+		case V4L2_CID_MPEG_VIDEO_GOP_CLOSURE:
+			ctrl->value = dev->closed_gop;
+			break;
+		case V4L2_CID_MPEG_VIDEO_BITRATE:
+			ctrl->value = dev->h51_mode.vBitrate * 1000;
+			break;
+		case V4L2_CID_MPEG_AUDIO_ENCODING:
+			ctrl->value = V4L2_MPEG_AUDIO_ENCODING_LAYER_2;
+			break;
+		case V4L2_CID_MPEG_AUDIO_SAMPLING_FREQ:
+			ctrl->value = V4L2_MPEG_AUDIO_SAMPLING_FREQ_48000;
+			break;
+		case V4L2_CID_MPEG_AUDIO_L2_BITRATE:
+			switch (dev->h51_mode.aBitrate) {
+			case 128:
+				ctrl->value = V4L2_MPEG_AUDIO_L2_BITRATE_128K;
+				break;
+			case 160:
+				ctrl->value = V4L2_MPEG_AUDIO_L2_BITRATE_160K;
+				break;
+			case 192:
+				ctrl->value = V4L2_MPEG_AUDIO_L2_BITRATE_192K;
+				break;
+			case 224:
+				ctrl->value = V4L2_MPEG_AUDIO_L2_BITRATE_224K;
+				break;
+			case 256:
+				ctrl->value = V4L2_MPEG_AUDIO_L2_BITRATE_256K;
+				break;
+			default:
+				printk(KERN_INFO "unknown audio bitrate specified.\n");
+				break;
+			}
+			break;
+		case V4L2_CID_BRIGHTNESS:
+			ctrl->value = dev->brightness;
+			break;
+		case V4L2_CID_CONTRAST:
+			ctrl->value = dev->contrast;
+			break;
+		case V4L2_CID_SATURATION:
+			ctrl->value = dev->saturation;
+			break;
+		case V4L2_CID_HUE:
+			ctrl->value = dev->hue;
+			break;
+		default:
+			return -EINVAL;
+		}
+	}
+	return 0;
+}
+
+static int vidioc_s_ext_ctrls(struct file *file, void *priv,
+			      struct v4l2_ext_controls *ctrls)
 {
 	int i;
-	struct s2226_fh *fh = file->private_data;
-	struct s2226_dev *dev = fh->dev;
-	dev_info(&dev->udev->dev, "set ctrl %d %d\n", ctrl->id,
-		 V4L2_CID_MPEG_VIDEO_BITRATE);
-	/* verify range */
-	for (i = 0; i < ARRAY_SIZE(s2226_qctrl); i++) {
-		if (ctrl->id == s2226_qctrl[i].id) {
-			if (ctrl->value < s2226_qctrl[i].minimum ||
-			    ctrl->value > s2226_qctrl[i].maximum)
-				return -ERANGE;
-		}
-	}
-	switch (ctrl->id) {
-	case V4L2_CID_MPEG_STREAM_TYPE:
-		break;
-	case V4L2_CID_MPEG_VIDEO_ENCODING:
-		break;
-	case V4L2_CID_MPEG_VIDEO_GOP_CLOSURE:
-		dev->closed_gop = ctrl->value;
-		break;
-	case V4L2_CID_MPEG_VIDEO_BITRATE:
-		dev->h51_mode.vBitrate = ctrl->value / 1000;
-		dprintk(4, "setting vBitrate to %d kbps\n",
-			dev->h51_mode.vBitrate);
-		break;
-	case V4L2_CID_MPEG_AUDIO_L2_BITRATE:
-		switch (ctrl->value) {
-		case V4L2_MPEG_AUDIO_L2_BITRATE_128K:
-			dev->h51_mode.aBitrate = 128;
+	struct s2226_stream *strm = video_drvdata(file);
+	struct s2226_dev *dev = strm->dev;
+	struct v4l2_ext_control *ctrl = ctrls->controls;
+	int rc = 0;
+
+	dprintk(2, "%s: %d %d\n", __func__, ctrl->id, V4L2_CID_MPEG_VIDEO_BITRATE);
+	/* verify control values */
+	rc = vidioc_try_ext_ctrls(file, priv, ctrls);
+	if (rc < 0)
+		return rc;
+	for (i = 0; i < ctrls->count; i++, ctrl++) {
+		switch (ctrl->id) {
+		case V4L2_CID_BRIGHTNESS:
+			s2226_set_brightness(dev, ctrl->value);
 			break;
-		case V4L2_MPEG_AUDIO_L2_BITRATE_160K:
-			dev->h51_mode.aBitrate = 160;
+		case V4L2_CID_CONTRAST:
+			s2226_set_contrast(dev, ctrl->value);
 			break;
-		case V4L2_MPEG_AUDIO_L2_BITRATE_192K:
-			dev->h51_mode.aBitrate = 192;
+		case V4L2_CID_SATURATION:
+			s2226_set_saturation(dev, ctrl->value);
 			break;
-		case V4L2_MPEG_AUDIO_L2_BITRATE_224K:
-			dev->h51_mode.aBitrate = 224;
+		case V4L2_CID_HUE:
+			s2226_set_hue(dev, ctrl->value);
 			break;
-		case V4L2_MPEG_AUDIO_L2_BITRATE_256K:
-			dev->h51_mode.aBitrate = 256;
+		case V4L2_CID_MPEG_STREAM_TYPE:
+			break;
+		case V4L2_CID_MPEG_VIDEO_ENCODING:
+			break;
+		case V4L2_CID_MPEG_VIDEO_GOP_CLOSURE:
+			dev->closed_gop = ctrl->value;
+			break;
+		case V4L2_CID_MPEG_VIDEO_BITRATE:
+			dev->h51_mode.vBitrate = ctrl->value / 1000;
+			dprintk(4, "setting vBitrate to %d kbps\n", dev->h51_mode.vBitrate);
+			break;
+		case V4L2_CID_MPEG_AUDIO_L2_BITRATE:
+			switch (ctrl->value) {
+			case V4L2_MPEG_AUDIO_L2_BITRATE_128K:
+				dev->h51_mode.aBitrate = 128;
+				break;
+			case V4L2_MPEG_AUDIO_L2_BITRATE_160K:
+				dev->h51_mode.aBitrate = 160;
+				break;
+			case V4L2_MPEG_AUDIO_L2_BITRATE_192K:
+				dev->h51_mode.aBitrate = 192;
+				break;
+			case V4L2_MPEG_AUDIO_L2_BITRATE_224K:
+				dev->h51_mode.aBitrate = 224;
+				break;
+			case V4L2_MPEG_AUDIO_L2_BITRATE_256K:
+				dev->h51_mode.aBitrate = 256;
+				break;
+			default:
+				dev_info(&dev->udev->dev,
+					 "inv audio rate using 256k\n");
+				dev->h51_mode.aBitrate = 256;
+				break;
+			}
 			break;
 		default:
-			dev_info(&dev->udev->dev,
-				 "invalid audio bitrate."
-				 " using default 256k\n");
-			dev->h51_mode.aBitrate = 256;
-			break;
+			return -EINVAL;
 		}
-		break;
-	case V4L2_CID_BRIGHTNESS:
-		s2226_set_brightness(dev, ctrl->value);
-		break;
-	case V4L2_CID_CONTRAST:
-		s2226_set_contrast(dev, ctrl->value);
-		break;
-	case V4L2_CID_SATURATION:
-		s2226_set_saturation(dev, ctrl->value);
-		break;
-	case V4L2_CID_HUE:
-		s2226_set_hue(dev, ctrl->value);
-		break;
-	default:
-		return -EINVAL;
 	}
 	return 0;
 }
 
-static unsigned int s2226_poll_v4l(struct file *file,
-				   struct poll_table_struct *wait)
-{
-	struct s2226_fh *fh = file->private_data;
-	int rc;
-	dprintk(4, "%s\n", __func__);
-	if (V4L2_BUF_TYPE_VIDEO_CAPTURE != fh->type)
-		return POLLERR;
-	rc = videobuf_poll_stream(file, &fh->vb_vidq, wait);
-	dprintk(4, "%s return 0x%x\n", __func__, rc);
-	return rc;
-}
 
-static int s2226_mmap_v4l(struct file *file, struct vm_area_struct *vma)
-{
-	struct s2226_fh *fh = file->private_data;
-	struct videobuf_queue *q = &fh->vb_vidq;
-	int ret;
-	dprintk(4, "%s\n", __func__);
-	if (!fh)
-		return -ENODEV;
-	dprintk(4, "mmap called, vma=0x%08lx\n", (unsigned long)vma);
-/* workaround deadlock bug introduced in 3.11 (in videobuf)
-   https://www.mail-archive.com/linux-media@vger.kernel.org/msg68345.html
-   Note: we will migrate to videobuf2 soon. */
-	mutex_lock(&q->vb_lock);
-	q->ext_lock = (struct mutex *) 1;
-	dprintk(4, "mmap called, vma=0x%08lx\n", (unsigned long)vma);
-	ret = videobuf_mmap_mapper(q, vma);
-	q->ext_lock = NULL;
-	mutex_unlock(&q->vb_lock);
-	dprintk(4, "vma start=0x%08lx, size=%ld, ret=%d\n",
-		(unsigned long)vma->vm_start,
-		(unsigned long)vma->vm_end - (unsigned long)vma->vm_start, ret);
-	return ret;
-}
-
-
+long s2226_ioctl(struct file *file, unsigned int cmd, unsigned long arg);
 
 static const struct v4l2_file_operations s2226_fops_v4l = {
 	.owner = THIS_MODULE,
 	.open = s2226_open_v4l,
-	.release = s2226_release_v4l,
-	.poll = s2226_poll_v4l,
-	.ioctl = video_ioctl2,
-	.mmap = s2226_mmap_v4l,
+	.release = s2226_close,
+	.unlocked_ioctl = s2226_ioctl,
+	.write = s2226_write,
+	.poll = vb2_fop_poll,
+	.mmap = vb2_fop_mmap,
+	.read = vb2_fop_read,
 };
 
 static const struct v4l2_ioctl_ops s2226_ioctl_ops = {
@@ -5153,27 +5373,25 @@ static const struct v4l2_ioctl_ops s2226_ioctl_ops = {
 	.vidioc_g_fmt_vid_cap = vidioc_g_fmt_vid_cap,
 	.vidioc_try_fmt_vid_cap = vidioc_try_fmt_vid_cap,
 	.vidioc_s_fmt_vid_cap = vidioc_s_fmt_vid_cap,
-	.vidioc_reqbufs = vidioc_reqbufs,
-	.vidioc_querybuf = vidioc_querybuf,
-	.vidioc_qbuf = vidioc_qbuf,
-	.vidioc_dqbuf = vidioc_dqbuf,
-	.vidioc_s_std = vidioc_s_std,
+	.vidioc_reqbufs = vb2_ioctl_reqbufs,
+	.vidioc_querybuf = vb2_ioctl_querybuf,
+	.vidioc_qbuf = vb2_ioctl_qbuf,
+	.vidioc_dqbuf = vb2_ioctl_dqbuf,
 	.vidioc_g_std = vidioc_g_std,
+	.vidioc_s_std = vidioc_s_std,
 	.vidioc_enum_input = vidioc_enum_input,
 	.vidioc_g_input = vidioc_g_input,
 	.vidioc_s_input = vidioc_s_input,
 	.vidioc_queryctrl = vidioc_queryctrl,
 	.vidioc_querymenu = vidioc_querymenu,
-	.vidioc_g_ctrl = vidioc_g_ctrl,
-	.vidioc_s_ctrl = vidioc_s_ctrl,
-	.vidioc_streamon = vidioc_streamon,
-	.vidioc_streamoff = vidioc_streamoff,
+	.vidioc_g_ext_ctrls = vidioc_g_ext_ctrls,
+	.vidioc_s_ext_ctrls = vidioc_s_ext_ctrls,
+	.vidioc_try_ext_ctrls = vidioc_try_ext_ctrls,
+	.vidioc_streamon = vb2_ioctl_streamon,
+	.vidioc_streamoff = vb2_ioctl_streamoff,
 	.vidioc_enumaudio = vidioc_enumaudio,
 	.vidioc_s_audio = vidioc_s_audio,
 	.vidioc_g_audio = vidioc_g_audio,
-#ifdef CONFIG_VIDEO_V4L1_COMPAT
-	.vidiocgmbuf = vidioc_cgmbuf,
-#endif
 };
 
 static struct video_device template = {
@@ -5181,222 +5399,95 @@ static struct video_device template = {
 	.fops = &s2226_fops_v4l,
 	.ioctl_ops = &s2226_ioctl_ops,
 	.minor = -1,
-	.release = video_device_release,
+	.release = video_device_release_empty,
 	.tvnorms = S2226_NORMS,
 };
+
 
 static int s2226_probe_v4l(struct s2226_dev *dev)
 {
 	int ret;
 	int cur_nr = video_nr;
-	list_add_tail(&dev->s2226_devlist, &s2226_devlist);
-	INIT_LIST_HEAD(&dev->vidq.active);
+	struct vb2_queue *q;
+	int i;
 
-	spin_lock_init(&dev->slock);
-	s2226_mutex_init(&dev->reslock);
-
-	dev->vidq.dev = dev;
-	/* register video device */
-	dev->vdev = video_device_alloc();
-	memcpy(dev->vdev, &template, sizeof(struct video_device));
-	dev->vdev->v4l2_dev = &dev->v4l2_dev;
+	dev->v4l2_dev.release = s2226_release;
 	ret = v4l2_device_register(&dev->interface->dev, &dev->v4l2_dev);
 	if (ret) {
-		dev_err(&dev->udev->dev,
-			"s2226: could not register device\n");
+		printk(KERN_ERR "s2226 v4l2 device register fail\n");
 		return ret;
 	}
+	for (i = 0; i < S2226_MAX_STREAMS; i++) {
+		struct s2226_stream *strm = &dev->strm[i];
+		spin_lock_init(&strm->qlock);
+		mutex_init(&strm->vb_lock);
+		INIT_LIST_HEAD(&strm->buf_list);
+		strm->width = S2226_DEF_PREVIEW_X;
+		strm->height = S2226_DEF_PREVIEW_Y;
+		if (i == 2)
+			strm->fourcc = V4L2_PIX_FMT_UYVY;
+		else
+			strm->fourcc = V4L2_PIX_FMT_MPEG;
+		if (i == 0) {
+			s2226_set_attr(dev, ATTR_SCALE_X, strm->width);
+			s2226_set_attr(dev, ATTR_SCALE_Y, strm->height);
+			s2226_set_attr(dev, ATTR_SCALE_SINGLE, 1);
+			s2226_set_attr(dev, ATTR_MPEG_SCALER, 1);
+		}
+		q = &strm->vb_vidq;
+		strm->queue = &strm->vb_vidq;
+		q->type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+		q->io_modes = VB2_MMAP | VB2_READ | VB2_USERPTR;
+		q->drv_priv = strm;
+		q->lock = &strm->vb_lock;
+		q->buf_struct_size = sizeof(struct s2226_buffer);
+		q->mem_ops = &vb2_vmalloc_memops;
+		q->ops = &s2226_vb2_ops;
+		q->timestamp_type = V4L2_BUF_FLAG_TIMESTAMP_MONOTONIC;
+		ret = vb2_queue_init(q);
+		if (ret != 0) {
+			dev_err(&dev->udev->dev,
+				"%s vb2_queue_init 0x%x\n", __func__, ret);
+			return ret;
+		}
 
-	if (video_nr == -1)
-		ret = video_register_device(dev->vdev,
-					    VFL_TYPE_GRABBER,
-					    video_nr);
-	else
-		ret = video_register_device(dev->vdev,
-					    VFL_TYPE_GRABBER,
-					    cur_nr);
-	video_set_drvdata(dev->vdev, dev);
+		dprintk(5, "queue init %d\n", i);
+		/* register MPEG video device */
+		strm->vdev = template;
+		/* for locking purposes */
+		strm->vdev.queue = q;
+		strm->vdev.lock = &dev->lock;
+		strm->vdev.v4l2_dev = &dev->v4l2_dev;
+		set_bit(V4L2_FL_USE_FH_PRIO, &strm->vdev.flags);
+		video_set_drvdata(&strm->vdev, strm);
+		if (video_nr == -1)
+			ret = video_register_device(&strm->vdev,
+						    VFL_TYPE_GRABBER,
+						    video_nr);
+		else
+			ret = video_register_device(&strm->vdev,
+						    VFL_TYPE_GRABBER,
+						    cur_nr);
+		if (ret != 0) {
+			dev_err(&dev->udev->dev,
+				"failed to register video device!\n");
+			return ret;
+		}
+
+	}
 	dev->current_norm = V4L2_STD_NTSC_M;
-	if (ret != 0) {
-		dev_err(&dev->udev->dev,
-			"failed to register video device!\n");
-		v4l2_device_unregister(&dev->v4l2_dev);
-		return ret;
-	}
-	/*todo add revision*/
 	dev_info(&dev->udev->dev, "Sensoray 2226 V4L driver\n");
-	return ret;
+	dev->cur_input = -1;
+	dev->v4l_input = -1;
+	dev->is_decode = 0;
+	s2226_new_v4l_input(dev, S2226_INPUT_COMPOSITE_0);
+	return 0;
 }
 
-
-
-static void s2226_exit_v4l(struct s2226_dev *dev)
-{
-	struct list_head *list;
-	v4l2_device_disconnect(&dev->v4l2_dev);
-	v4l2_device_unregister(&dev->v4l2_dev);
-	if (-1 != dev->vdev->minor) {
-		video_unregister_device(dev->vdev);
-		pr_info("s2226 unregistered\n");
-	} else {
-		video_device_release(dev->vdev);
-		pr_info("s2226 released\n");
-	}
-	while (!list_empty(&s2226_devlist)) {
-		list = s2226_devlist.next;
-		list_del(list);
-	}
-}
 
 module_init(usb_s2226_init);
 module_exit(usb_s2226_exit);
 
-MODULE_DESCRIPTION("Sensoray 2226 Linux driver: Ver 1.03(Copyright 2008-2014)");
+MODULE_DESCRIPTION("Sensoray 2226 Linux driver (Copyright 2008-2014)");
 MODULE_LICENSE("GPL");
-
-
-/* AIC33 sanity checking */
-static int s2226_aic33_check(u8 page, u8 reg, u8 val)
-{
-	int rc = 0;
-	if (page == 1) {
-		dprintk(2, "%s page 1\n", __func__);
-		return 0; /* no checking for page 1 yet */
-	}
-	switch (reg) {
-	default:
-		break;
-	case 0:
-		if (val & 0xfe)
-			rc = -EINVAL;
-		break;
-	case 1:
-		if (val & 0x7f)
-			rc = -EINVAL;
-		break;
-	case 6:
-	case 95:
-		if (val & 0x03)
-			rc = -EINVAL;
-		break;
-	case 40:
-		if ((val & 0x03) == 0x03)
-			rc = -EINVAL;
-		break;
-	case 41:
-		if (((val >> 6) & 0x03) == 0x03)
-			rc = -EINVAL;
-		if (((val >> 4) & 0x03) == 0x03)
-			rc = -EINVAL;
-		if (((val >> 0) & 0x03) == 0x03)
-			rc = -EINVAL;
-		if ((val >> 2) & 0x03)
-			rc = -EINVAL;
-		break;
-	case 42:
-		if ((val >> 4) >= 0x0c)
-			rc = -EINVAL;
-		if (val & 1)
-			rc = -EINVAL;
-		break;
-	case 7:
-	case 94:
-		if (val & 1)
-			rc = -EINVAL;
-		break;
-	case 99:
-		if (((val >> 4) & 1) == 1)
-			rc = -EINVAL;
-		if (val & 1)
-			rc = -EINVAL;
-		break;
-	case 13:
-		if (((val >> 2) & 0x07) >= 6)
-			rc = -EINVAL;
-		break;
-	case 14:
-		if (val & 0x07)
-			rc = -EINVAL;
-		/* do not set bits D3 and D6 high at same time */
-		if ((val & 0x08) && (val & 0x20))
-			rc = -EINVAL;
-		break;
-	case 21:
-		if ((((val >> 3) & 0x0f) >= 9) &&
-		    (((val >> 3) & 0x0f) < 15))
-			rc = -EINVAL;
-		if (val & 0x07)
-			rc = -EINVAL;
-		break;
-	case 17:
-	case 18:
-		if ((((val >> 4) & 0x0f) >= 9) &&
-		    (((val >> 4) & 0x0f) < 15))
-			rc = -EINVAL;
-		if (((val & 0x0f) >= 9) &&
-		     ((val & 0x0f) < 15))
-			rc = -EINVAL;
-		break;
-	case 19:
-	case 20:
-	case 22:
-		if ((((val >> 3) & 0x0f) >= 9) &&
-		    (((val >> 3) & 0x0f) < 15))
-			rc = -EINVAL;
-		break;
-	case 23:
-		if (val & 0x03)
-			rc = -EINVAL;
-		if ((((val >> 3) & 0x0f) >= 9) &&
-		    (((val >> 3) & 0x0f) < 15))
-			rc = -EINVAL;
-		break;
-	case 24:
-		if (val & 0x07)
-			rc = -EINVAL;
-		if ((((val >> 3) & 0x0f) >= 9) &&
-		    (((val >> 3) & 0x0f) < 15))
-			rc = -EINVAL;
-		break;
-	case 37:
-		if (val & 0x07)
-			rc = -EINVAL;
-		if (((val >> 4) & 0x03) == 0x03)
-			rc = -EINVAL;
-		break;
-	case 38:
-		if ((val & 0x01) || (val & 0xc0))
-			rc = -EINVAL;
-		if (((val >> 3) & 0x07) >= 5)
-			rc = -EINVAL;
-		break;
-	case 39:
-		rc = -EINVAL;
-		break;
-	case 51:
-	case 58:
-	case 65:
-	case 72:
-		if ((val >> 4) >= 0x0a)
-			rc = -EINVAL;
-		break;
-	case 86:
-	case 79:
-		if ((val >> 4) >= 0x0a) /* D7-D4 (1010-1111 reserved) */
-			rc = -EINVAL;
-		/*fall thru */
-	case 93:
-		if (val & 0x04) /* write only zero to D2 */
-			rc = -EINVAL;
-		break;
-	case 100:
-		if (((val >> 2) & 0x03) == 0x03) /* DO not write 11 to D3-D2 */
-			rc = -EINVAL;
-		break;
-
-	}
-	if (rc != 0)
-		pr_info("%s: err wr [page %d] reg %d of val 0x%x\n",
-			__func__, page, reg, val);
-	return rc;
-}
+MODULE_VERSION(S2226_VERSION);
