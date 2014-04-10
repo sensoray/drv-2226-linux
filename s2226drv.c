@@ -274,9 +274,6 @@ struct s2226_dev;
 #define S2226_DECODE_1080P_2398 11
 #define S2226_DECODE_MAX        12
 
-
-
-
 /* MPEG audio source */
 #define    S2226_AUDIOINPUT_LINE       0
 #define    S2226_AUDIOINPUT_TONE       1 /* test tone */
@@ -286,7 +283,6 @@ struct s2226_dev;
 /* maximum size of URB buffers */
 #define MAX_USB_SIZE (16*1024)
 #define MAX_USB_INT_SIZE 512 /* interrupt endpoint */
-
 
 #define S2226_MPEG_BUFFER_SIZE (S2226_MPEG_URB_SIZE)
 #define S2226_MIN_BUFS    10
@@ -513,7 +509,8 @@ static int s2226_vendor_request(void *pdev, unsigned char req,
 			 unsigned short idx, unsigned short val,
 			 void *pbuf, unsigned int len,
 			 int bOut);
-static int send_sdi_write(struct s2226_dev *dev, unsigned char addr, unsigned char val, int bIn);
+static int send_sdi_write(struct s2226_dev *dev, unsigned char addr,
+			  unsigned char val, int bIn);
 static int send_persona_run(struct s2226_dev *dev, unsigned char persona);
 static int send_persona_halt(struct s2226_dev *dev, unsigned char index, unsigned int fw);
 static int s2226_flush_in_ep(struct s2226_dev *dev);
@@ -1497,18 +1494,6 @@ static int s2226_start_encode(struct s2226_dev *dev, int idx, int context)
 		dev->h51_reload_required = 0;
 		dprintk(2, "s2226: chipset reloaded\n");
 	}
-#if 0
-	iface_desc = dev->interface->cur_altsetting;
-	for (i = 0; i < iface_desc->desc.bNumEndpoints; ++i) {
-		endpoint = &iface_desc->endpoint[i].desc;
-		dprintk(1, "endpoint %d is %s %s\n",
-			endpoint->bEndpointAddress & 7,
-			((endpoint->bmAttributes & USB_ENDPOINT_XFERTYPE_MASK)
-			 == USB_ENDPOINT_XFER_BULK) ? "bulk" : "other",
-			((endpoint->bEndpointAddress & USB_ENDPOINT_DIR_MASK)
-			 == USB_DIR_IN) ? "in" : "out");
-	}
-#endif
 	setH51regs(&dev->h51_mode);
 	for (bank = 0; bank < 4; bank++) {
 		int numregs = 0;
@@ -1616,7 +1601,6 @@ static int s2226_start_encode(struct s2226_dev *dev, int idx, int context)
 
 	/* 5)  Start encode */
 	rc = send_h51_setmode(dev, 0, STREAM_MODE_ENCODE);
-	rc = 0;
 	if (rc < 0) {
 		dprintk(1,  "%s persona_halt %d\n", __func__, rc);
 		return rc;
@@ -3989,7 +3973,7 @@ static int s2226_open_v4l(struct file *file)
 	int rc;
 	if (strm->type != S2226_STREAM_DECODE) {
 		rc = v4l2_fh_open(file);
-		dprintk("2, %s: %d\n", __func__, rc);
+		dprintk(2, "%s: %d\n", __func__, rc);
 		return rc;
 	}
 #endif
@@ -5289,7 +5273,9 @@ static int vidioc_s_input(struct file *file, void *priv, unsigned int i)
 {
 	struct s2226_stream *strm = video_drvdata(file);
 	struct s2226_dev *dev = strm->dev;
+#ifndef USE_VIDEOBUF2
 	struct s2226_fh *fh = priv;
+#endif
 	int rc;
 
 	dprintk(2, "%s: %d type %d\n", __func__, i, strm->type);
@@ -5299,27 +5285,10 @@ static int vidioc_s_input(struct file *file, void *priv, unsigned int i)
 	}
 #ifdef USE_VIDEOBUF2
 	/* we don't set the input if any device streams are running */
-	if (vb2_is_streaming(&dev->m->vb_vidq)) {
-		/* If the input is same as existing, we don't need
-		   to reset it.  We don't do this in all cases
-		   because we may want to physically reset the input
-		   on the device if it is not streaming.
-		*/
+	if (s2226_anystream_busy(dev)) {
 		if (i == dev->v4l_input && !dev->is_decode)
 			return 0;
 		dprintk(2, "eBUSY m\n");
-		return -EBUSY;
-	}
-	if (vb2_is_streaming(&dev->p->vb_vidq)) {
-		/* if input is same as existing, don't need
-		   to reset it */
-		if (i == dev->v4l_input && !dev->is_decode)
-			return 0;
-		dprintk(2, "eBUSY p\n");
-		return -EBUSY;
-	}
-	if (res_locked(fh->dev, fh) & RES_DECODE) {
-		dprintk(1, "stream busy, can't set input, decoding\n");
 		return -EBUSY;
 	}
 #else
