@@ -973,6 +973,17 @@ class Demo:
 			vbox.pack_start(hbox, False, False, 0)
 			hbox.show()
 
+			if cp.card == "Sensoray Model 2226 Decode":
+				button = gtk.Button("Quit")
+				button.connect_object("clicked", gtk.Widget.destroy, self.window)
+				button.show()
+				quitbox.pack_start(button, False, False, 0)
+				
+				vbox.pack_start(quitbox, False, True, 0)
+				quitbox.show()
+				
+				vbox.show()
+				return vbox
 
 			if cp.capabilities & V4L2_CAP_VIDEO_CAPTURE:
 				# enumerate video inputs
@@ -1041,6 +1052,7 @@ class Demo:
 				vbox.pack_start(hbox, False, False, 0)
 				hbox.show()
 
+			# create a option menu for video frame sizes
 
 			if cp.capabilities & V4L2_CAP_VIDEO_CAPTURE:
 				format = v4l2_format()
@@ -1049,25 +1061,23 @@ class Demo:
 				except: pass
 
 				dprint("current format is 0x%08x" % format.fmt.pix.pixelformat)
+				dprint("current format is 0x%08x", format.fmt.pix.pixelformat)
 				self.outfmt = format.fmt.pix.pixelformat
 				self.width = format.fmt.pix.width
 				self.height = format.fmt.pix.height
 				dprint("current size is ", self.width, self.height)
 
 				hbox = gtk.HBox(False, 10)
-				label = gtk.Label("Size:")
+				label = gtk.Label("Preview Size:")
 				hbox.pack_start(label, False, False, 0)
-				label.show()
+				if cp.card == "Sensoray Model 2226 Preview":
+					label.show()
 
 				opt = gtk.OptionMenu()
 				menu = gtk.Menu()
 				menudefault = 0
 				i = 0
 				for dim in [
-					[720,576, "D1 PAL"],
-					[704,576, "D1 PAL "],
-					[720,480, "D1 NTSC "],
-					[704,480, "D1 NTSC"],
 					[640,480, "VGA"],
 					[352,288, "CIF"],
 					[320,240, "SIF"],
@@ -1078,6 +1088,17 @@ class Demo:
 					if self.width == dim[0] and self.height == dim[1]:
 						menudefault = i
 					i += 1
+
+				opt.set_menu(menu)
+				opt.set_history(menudefault)
+				hbox.pack_start(opt, False, False, 0)
+				if cp.card == "Sensoray Model 2226 Preview":
+					opt.show()
+
+				vbox.pack_start(hbox, False, False, 0)
+				if cp.card == "Sensoray Model 2226 Preview":
+					hbox.show()
+
 			# enumerate video standards
 
 			hbox = gtk.HBox(False, 10)
@@ -1542,12 +1563,14 @@ class Demo:
 
 				mplayer = gtk.Button("Preview")
 				mplayer.connect_object("clicked", self.launch_mplayer, None)
-				mplayer.show()
+				if cp.card == "Sensoray Model 2226 Preview":
+					mplayer.show()
 				quitbox.pack_start(mplayer, False, False, 0)
 
 				capture = gtk.Button("Save")
 				capture.connect_object("clicked", self.launch_capture, None)
-				capture.show()
+				if cp.card == "Sensoray Model 2226 H.264":
+					capture.show()
 				quitbox.pack_start(capture, False, False, 0)
 
 				#capture = gtk.Button("Capture to AVI")
@@ -1556,7 +1579,8 @@ class Demo:
 				#vbox.pack_start(capture, False, False, 0)
 				stream = gtk.Button("Stream")
 				stream.connect_object("clicked", self.launch_stream, None)
-				stream.show()
+				if cp.card == "Sensoray Model 2226 H.264":
+					stream.show()
 				quitbox.pack_start(stream, False, False, 0)
 
 				button = gtk.Button("Stop")
