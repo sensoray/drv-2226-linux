@@ -5407,7 +5407,7 @@ static int s2226_probe_v4l(struct s2226_dev *dev)
 		INIT_LIST_HEAD(&strm->buf_list);
 		strm->width = S2226_DEF_PREVIEW_X;
 		strm->height = S2226_DEF_PREVIEW_Y;
-		if (i == 2)
+		if (i == 1)
 			strm->fourcc = V4L2_PIX_FMT_UYVY;
 		else
 			strm->fourcc = V4L2_PIX_FMT_MPEG;
