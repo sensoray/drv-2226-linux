@@ -214,10 +214,11 @@ static void s2226_read_preview_callback(struct urb *u);
 static void s2226_read_preview_callback(struct urb *u, struct pt_regs *ptregs);
 #endif
 
-#define AUDIOROUTE_LINE1L S2226_AUDIOROUTE_LINE1L
-#define AUDIOROUTE_LINE2L S2226_AUDIOROUTE_LINE2L
-#define AUDIOROUTE_LINE1L_BYPASS S2226_AUDIOROUTE_LINE1L_BYPASS
-#define AUDIOROUTE_LINE2L_BYPASS S2226_AUDIOROUTE_LINE2L_BYPASS
+#define AUDIOROUTE_LINE1L 0
+#define AUDIOROUTE_LINE2L 1
+#define AUDIOROUTE_LINE1L_BYPASS 2
+#define AUDIOROUTE_LINE2L_BYPASS 3
+
 static int SetAudioIn(struct s2226_dev *dev);
 static int SetAudioRoute(struct s2226_dev *dev, int route);
 static int SetAudioOut(struct s2226_dev *dev);
@@ -343,6 +344,7 @@ struct s2226_stream {
 	int height;
 	int fourcc;
 	int width;
+    int field;
 	struct video_device vdev;
 	struct s2226_urb write_vid[WR_URBS];
 	struct s2226_urb read_vid[RD_URBS];
@@ -382,19 +384,18 @@ struct s2226_audio {
 	int iVolGainL;
 	int bVolMuteR;
 	int bVolMuteL;
+
 	int iMonoGain;
-	int iHpGainR;
-	int iHpGainL;
+	int bMonoMute;
 	int iStereoGainR;
 	int iStereoGainL;
-	int bStereoBal;
-	int bHpBal;
-	int bMonoBal;
 	int bStereoMuteR;
 	int bStereoMuteL;
+	int iHpGainR;
+	int iHpGainL;
 	int bHpMuteR;
 	int bHpMuteL;
-	int bMonoMute;
+
 	int iRoute;
 };
 
@@ -2606,7 +2607,7 @@ long s2226_ioctl(struct file *file,
 		/* protect our memory space */
 		if (!mfgmode && (p.addr < 0x10000))
 			return -EINVAL;
-		dprintk(2, "flash write addr:%x, len:%x\n", p.addr, p.len);
+		printk("flash write addr:%x, len:%x\n", p.addr, p.len);
 		ret = send_flash_write(dev, p.addr, p.data, p.len);
 		if (ret < 0)
 			return ret;
@@ -2665,28 +2666,6 @@ long s2226_ioctl(struct file *file,
 		ret = send_fpga_boot(dev);
 		if (ret < 0)
 			return ret;
-		break;
-	case S2226_VIDIOC_SET_INPUT:
-		dprintk(0, "set input %d\n", (int)arg);
-		if (res_locked(dev, fh) & RES_STREAM) {
-			dev_info(&dev->udev->dev,
-				 "s2226: boot, device busy(streaming)\n");
-			return -EBUSY;
-		}
-		return 0;
-		ret = s2226_set_attr(dev, ATTR_INPUT, arg);
-		ret = s2226_set_attr(dev, ATTR_INPUT, arg);
-		if (dev->fpga_ver <= 0)
-			s2226_get_fpga_ver(dev);
-		if (1) {
-			int rc;
-			rc = s2226_new_input(dev, arg);
-			if (rc != 0)
-				return rc;
-		} else {
-			dprintk(1, "input %d is not connected\n", (int)arg);
-		}
-		(void) s2226_set_audiomux_mpegin(dev, dev->cur_audiompeg);
 		break;
 #endif
 	case S2226_VIDIOC_GET_INPUT:
@@ -2801,58 +2780,6 @@ long s2226_ioctl(struct file *file,
 			__func__, (int)arg);
 		dev->avresync = (int)arg;
 		break;
-	case S2226_VIDIOC_GET_LEVEL:
-	{
-		struct level_param lvl;
-		dprintk(3, "get level\n");
-		if (copy_from_user(&lvl, argp, sizeof(struct level_param)))
-			return -EINVAL;
-		switch (lvl.idx) {
-		case S2226_LEVEL_BRIGHTNESS:
-			lvl.val = dev->brightness;
-			break;
-		case S2226_LEVEL_CONTRAST:
-			lvl.val = dev->contrast;
-			break;
-		case S2226_LEVEL_HUE:
-			lvl.val = dev->hue;
-			break;
-		case S2226_LEVEL_SATURATION:
-			lvl.val = dev->saturation;
-			break;
-		default:
-			return -EINVAL;
-		}
-		dprintk(3, "get level: idx %d, val %d\n", lvl.idx, lvl.val);
-		ret = copy_to_user(argp, &lvl, sizeof(struct level_param));
-		break;
-	}
-	break;
-	case S2226_VIDIOC_SET_LEVEL:
-	{
-		struct level_param lvl;
-		if (copy_from_user(&lvl, argp, sizeof(struct level_param)))
-			return -EINVAL;
-		dprintk(3, "set level: idx %d, val %d\n", lvl.idx, lvl.val);
-		switch (lvl.idx) {
-		case S2226_LEVEL_BRIGHTNESS:
-			s2226_set_brightness(dev, lvl.val);
-			break;
-		case S2226_LEVEL_CONTRAST:
-			s2226_set_contrast(dev, lvl.val);
-			break;
-		case S2226_LEVEL_HUE:
-			s2226_set_hue(dev, lvl.val);
-			break;
-		case S2226_LEVEL_SATURATION:
-			s2226_set_saturation(dev, lvl.val);
-			break;
-		default:
-			return -EINVAL;
-		}
-		ret = 0;
-		break;
-	}
 	case S2226_VIDIOC_FX2_VER:
 	{
 		char buf[64];
@@ -3705,6 +3632,7 @@ static int SetAudioOut(struct s2226_dev *dev)
 {
 	if (!dev->input_set)
 		return -1;
+
 	SetAudioVol(dev, dev->aud.iVolGainR,
 		    dev->aud.iVolGainL, dev->aud.bVolMuteL,
 		    dev->aud.bVolMuteR);
@@ -3722,7 +3650,7 @@ static int SetAudioOut(struct s2226_dev *dev)
 static int SetAudioRoute(struct s2226_dev *dev, int route)
 {
 	if (route == -1)
-		route = S2226_AUDIOROUTE_LINE1L;
+		route = AUDIOROUTE_LINE1L;
 	dev->aud.iRoute = route;
 	if (!dev->input_set)
 		return -1;
@@ -4606,7 +4534,7 @@ static int vidioc_g_fmt_vid_cap(struct file *file, void *priv,
 	f->fmt.pix.pixelformat = strm->fourcc;
 	switch (strm->type) {
 	case S2226_STREAM_PREVIEW:
-		f->fmt.pix.field = V4L2_FIELD_INTERLACED;
+		f->fmt.pix.field = strm->field;
 		f->fmt.pix.width = strm->width;
 		f->fmt.pix.height = strm->height;
 		f->fmt.pix.bytesperline = strm->width*2;
@@ -4662,6 +4590,7 @@ static int vidioc_try_fmt_vid_cap(struct file *file, void *priv,
 			h = maxh;
 		if (w >= maxw)
 			w = maxw;
+        //printk("field is %d\n", f->fmt.pix.field);
 		if (f->fmt.pix.field == V4L2_FIELD_ANY) {
 			if (IS_PROG_INPUT(dev->cur_input))
 				f->fmt.pix.field = V4L2_FIELD_TOP;
@@ -4670,6 +4599,7 @@ static int vidioc_try_fmt_vid_cap(struct file *file, void *priv,
 			else
 				f->fmt.pix.field = V4L2_FIELD_INTERLACED;
 		}
+        //printk("field is now: %d\n", f->fmt.pix.field);
 		f->fmt.pix.pixelformat = V4L2_PIX_FMT_UYVY;
 		f->fmt.pix.height = h;
 		f->fmt.pix.width = w;
@@ -4762,6 +4692,7 @@ static int vidioc_s_fmt_vid_cap(struct file *file, void *priv,
 	strm->width = f->fmt.pix.width;
 	strm->height = f->fmt.pix.height;
 	strm->fourcc = f->fmt.pix.pixelformat;
+    strm->field = f->fmt.pix.field;
 
 	s2226_set_attr(dev, ATTR_SCALE_X, f->fmt.pix.width);
 	s2226_set_attr(dev, ATTR_SCALE_Y, f->fmt.pix.height);
@@ -5374,17 +5305,112 @@ static int vidioc_s_audio(struct file *file, void *priv,
 }
 
 /* --- controls ---------------------------------------------- */
+static void ctrl_fill(struct v4l2_queryctrl *ctrl, enum v4l2_ctrl_type type,
+	const char *name, __s32 min, __s32 max, __s32 step, __s32 def, __u32 flags)
+{
+	ctrl->type = type;
+	strlcpy(ctrl->name, name, sizeof(ctrl->name));
+	ctrl->minimum = min;
+	ctrl->maximum = max;
+	ctrl->step = step;
+	ctrl->default_value = def;
+	ctrl->flags = flags;
+	ctrl->reserved[0] = 0;
+	ctrl->reserved[1] = 0;
+}
 
 static int vidioc_queryctrl(struct file *file, void *priv,
 			    struct v4l2_queryctrl *ctrl)
 {
 	struct s2226_stream *strm = video_drvdata(file);
-	static const u32 user_ctrls[] = {
+
+	static const u32 user_ctrls_decode[] = {
 		V4L2_CID_USER_CLASS,
 		V4L2_CID_BRIGHTNESS,
 		V4L2_CID_CONTRAST,
 		V4L2_CID_SATURATION,
 		V4L2_CID_HUE,
+
+		S2226_CID_AUDIOROUTE,
+
+		S2226_CID_AUDOUT_DACVOL_R,
+		S2226_CID_AUDOUT_DACVOL_L,
+		S2226_CID_AUDOUT_DACMUTE_R,
+		S2226_CID_AUDOUT_DACMUTE_L,
+		
+		S2226_CID_AUDOUT_MONO_GAIN,
+		S2226_CID_AUDOUT_MONO_MUTE,
+		
+		S2226_CID_AUDOUT_HP_GAIN_R,
+		S2226_CID_AUDOUT_HP_GAIN_L,
+		S2226_CID_AUDOUT_HP_MUTE_R,
+		S2226_CID_AUDOUT_HP_MUTE_L,
+		
+		S2226_CID_AUDOUT_STEREO_GAIN_R,
+		S2226_CID_AUDOUT_STEREO_GAIN_L,
+		S2226_CID_AUDOUT_STEREO_MUTE_R,
+		S2226_CID_AUDOUT_STEREO_MUTE_L,
+
+		0
+	};
+
+	static const u32 user_ctrls_preview[] = {
+		V4L2_CID_USER_CLASS,
+		V4L2_CID_BRIGHTNESS,
+		V4L2_CID_CONTRAST,
+		V4L2_CID_SATURATION,
+		V4L2_CID_HUE,
+
+		S2226_CID_AUDIOROUTE,
+
+		S2226_CID_AUDOUT_MONO_GAIN,
+		S2226_CID_AUDOUT_MONO_MUTE,
+		
+		S2226_CID_AUDOUT_HP_GAIN_R,
+		S2226_CID_AUDOUT_HP_GAIN_L,
+		S2226_CID_AUDOUT_HP_MUTE_R,
+		S2226_CID_AUDOUT_HP_MUTE_L,
+		
+		S2226_CID_AUDOUT_STEREO_GAIN_R,
+		S2226_CID_AUDOUT_STEREO_GAIN_L,
+		S2226_CID_AUDOUT_STEREO_MUTE_R,
+		S2226_CID_AUDOUT_STEREO_MUTE_L,
+
+
+		0
+	};
+
+	static const u32 user_ctrls_encode[] = {
+		V4L2_CID_USER_CLASS,
+		V4L2_CID_BRIGHTNESS,
+		V4L2_CID_CONTRAST,
+		V4L2_CID_SATURATION,
+		V4L2_CID_HUE,
+
+		S2226_CID_AUDIOROUTE,
+		S2226_CID_AUDIN_AGC_ON_R,
+		S2226_CID_AUDIN_AGC_ON_L,
+		S2226_CID_AUDIN_AGC_GAIN_R,
+		S2226_CID_AUDIN_AGC_GAIN_L,
+		S2226_CID_AUDIN_BAL_R,
+		S2226_CID_AUDIN_BAL_L,
+		S2226_CID_AUDIN_GAIN_R,
+		S2226_CID_AUDIN_GAIN_L,
+
+		S2226_CID_AUDOUT_MONO_GAIN,
+		S2226_CID_AUDOUT_MONO_MUTE,
+
+		S2226_CID_AUDOUT_HP_GAIN_R,
+		S2226_CID_AUDOUT_HP_GAIN_L,
+		S2226_CID_AUDOUT_HP_MUTE_R,
+		S2226_CID_AUDOUT_HP_MUTE_L,
+		
+		S2226_CID_AUDOUT_STEREO_GAIN_R,
+		S2226_CID_AUDOUT_STEREO_GAIN_L,
+		S2226_CID_AUDOUT_STEREO_MUTE_R,
+		S2226_CID_AUDOUT_STEREO_MUTE_L,
+
+
 		0
 	};
 	/* must be in increasing order */
@@ -5401,17 +5427,29 @@ static int vidioc_queryctrl(struct file *file, void *priv,
 	};
 
 	static const u32 *ctrl_classes[] = {
-		user_ctrls,
 		NULL,
-		NULL
+		NULL,
+		NULL,
 	};
 #define DEF_BRIGHT 0x80
 #define DEF_CONTRAST 0x40
 #define DEF_SATURATION 0x40
 #define DEF_HUE 0
 	int old_id;
-	if (strm->type != S2226_STREAM_PREVIEW)
+	switch (strm->type) {
+	case S2226_STREAM_DECODE:
+		ctrl_classes[0] = user_ctrls_decode;
+		break;
+	case S2226_STREAM_MPEG:
+		ctrl_classes[0] = user_ctrls_encode;
 		ctrl_classes[1] = mpeg_ctrls;
+		break;
+	case S2226_STREAM_PREVIEW:
+		ctrl_classes[0] = user_ctrls_preview;
+		break;
+	default:
+		return -EINVAL;
+	}
 
 	old_id = ctrl->id;
 	ctrl->id = v4l2_ctrl_next(ctrl_classes, old_id);
@@ -5419,6 +5457,75 @@ static int vidioc_queryctrl(struct file *file, void *priv,
 	case V4L2_CID_USER_CLASS:
 	case V4L2_CID_MPEG_CLASS:
 		v4l2_ctrl_query_fill(ctrl, 0, 0, 0, 0);
+		break;
+	case S2226_CID_AUDIN_BAL_R:
+		ctrl_fill(ctrl, V4L2_CTRL_TYPE_BOOLEAN, "Audio In Balanced Inputs", 0, 1, 1, 0, 0);
+		break;
+	case S2226_CID_AUDIN_BAL_L:
+		ctrl_fill(ctrl, V4L2_CTRL_TYPE_BOOLEAN, "Audio In Balanced Inputs", 0, 1, 1, 0, 0);
+		break;
+	case S2226_CID_AUDIN_AGC_ON_R:
+		ctrl_fill(ctrl, V4L2_CTRL_TYPE_BOOLEAN, "Audio In AGC On Right", 0, 1, 1, 0, 0);
+		break;
+	case S2226_CID_AUDIN_AGC_ON_L:
+		ctrl_fill(ctrl, V4L2_CTRL_TYPE_BOOLEAN, "Audio In AGC On Left", 0, 1, 1, 0, 0);
+		break;
+	case S2226_CID_AUDIN_GAIN_R:
+		ctrl_fill(ctrl, V4L2_CTRL_TYPE_INTEGER, "Audio In Gain Right", 0, 118, 1, 0, 0);
+		break;
+	case S2226_CID_AUDIN_GAIN_L:
+		ctrl_fill(ctrl, V4L2_CTRL_TYPE_INTEGER, "Audio In Gain Left", 0, 118, 1, 0, 0);
+		break;
+	case S2226_CID_AUDIN_AGC_GAIN_R:
+		ctrl_fill(ctrl, V4L2_CTRL_TYPE_INTEGER, "Audio In AGC Gain Right", 0, 118, 1, 0, 0);
+		break;
+	case S2226_CID_AUDIN_AGC_GAIN_L:
+		ctrl_fill(ctrl, V4L2_CTRL_TYPE_INTEGER, "Audio In AGC Gain Left", 0, 118, 1, 0, 0);
+		break;
+	case S2226_CID_AUDOUT_DACVOL_L:
+		ctrl_fill(ctrl, V4L2_CTRL_TYPE_INTEGER, "Audio DAC Out Volume Left (0=max, 127=-63.5dB)", 0, 127, 1, 0, 0);
+		break;
+	case S2226_CID_AUDOUT_DACVOL_R:
+		ctrl_fill(ctrl, V4L2_CTRL_TYPE_INTEGER, "Audio DAC Out Volume Right (0=max, 127=-63.5dB)", 0, 127, 1, 0, 0);
+		break;
+	case S2226_CID_AUDOUT_MONO_GAIN:
+		ctrl_fill(ctrl, V4L2_CTRL_TYPE_INTEGER, "Audio Mono Out Additional Gain (0=none to 9=9dB)", 0, 9, 1, 0, 0);
+		break;
+	case S2226_CID_AUDOUT_HP_GAIN_L:
+		ctrl_fill(ctrl, V4L2_CTRL_TYPE_INTEGER, "Audio HP Out Gain Left (0=none to 9=9dB)", 0, 9, 1, 0, 0);
+		break;
+	case S2226_CID_AUDOUT_HP_GAIN_R:
+		ctrl_fill(ctrl, V4L2_CTRL_TYPE_INTEGER, "Audio HP Out Gain Right (0=none to 9=9dB)", 0, 9, 1, 0, 0);
+		break;
+	case S2226_CID_AUDOUT_STEREO_GAIN_L:
+		ctrl_fill(ctrl, V4L2_CTRL_TYPE_INTEGER, "Audio Stereo Out Gain Left (0=none to 9=9dB)", 0, 9, 1, 0, 0);
+		break;
+	case S2226_CID_AUDOUT_STEREO_GAIN_R:
+		ctrl_fill(ctrl, V4L2_CTRL_TYPE_INTEGER, "Audio Stereo Out Gain Right (0=none to 9=9dB)", 0, 9, 1, 0, 0);
+		break;
+	case S2226_CID_AUDOUT_DACMUTE_R:
+		ctrl_fill(ctrl, V4L2_CTRL_TYPE_BOOLEAN, "Audio DAC Out Mute Right", 0, 1, 1, 0, 0);
+		break;
+	case S2226_CID_AUDOUT_DACMUTE_L:
+		ctrl_fill(ctrl, V4L2_CTRL_TYPE_BOOLEAN, "Audio DAC Out Mute Left", 0, 1, 1, 0, 0);
+		break;
+	case S2226_CID_AUDOUT_MONO_MUTE:
+		ctrl_fill(ctrl, V4L2_CTRL_TYPE_BOOLEAN, "Audio Mono Out Mute", 0, 1, 1, 0, 0);
+		break;
+	case S2226_CID_AUDOUT_HP_MUTE_L:
+		ctrl_fill(ctrl, V4L2_CTRL_TYPE_BOOLEAN, "Audio HP Out Mute Left", 0, 1, 1, 0, 0);
+		break;
+	case S2226_CID_AUDOUT_HP_MUTE_R:
+		ctrl_fill(ctrl, V4L2_CTRL_TYPE_BOOLEAN, "Audio HP Out Mute Right", 0, 1, 1, 0, 0);
+		break;
+	case S2226_CID_AUDOUT_STEREO_MUTE_L:
+		ctrl_fill(ctrl, V4L2_CTRL_TYPE_BOOLEAN, "Audio Stereo Out Mute Left", 0, 1, 1, 0, 0);
+		break;
+	case S2226_CID_AUDOUT_STEREO_MUTE_R:
+		ctrl_fill(ctrl, V4L2_CTRL_TYPE_BOOLEAN, "Audio Stereo Out Mute Right", 0, 1, 1, 0, 0);
+		break;
+	case S2226_CID_AUDIOROUTE:
+		ctrl_fill(ctrl, V4L2_CTRL_TYPE_MENU, "Audio Route", 0, 3, 1, 0, 0);
 		break;
 	case V4L2_CID_BRIGHTNESS:
 		v4l2_ctrl_query_fill(ctrl, 0, 255, 1, DEF_BRIGHT);
@@ -5481,6 +5588,13 @@ static int vidioc_queryctrl(struct file *file, void *priv,
 static int vidioc_querymenu(struct file *file, void *priv,
 			    struct v4l2_querymenu *qmenu)
 {
+	static const char *route[] = {
+		"Audio Line1",
+		"Audio Line2",
+		"Audio Line1 Bypass",
+		"Audio Line2 Bypass",
+	};
+
 	switch (qmenu->id) {
 /*	case V4L2_CID_MPEG_STREAM_TYPE:*/
 	case V4L2_CID_MPEG_VIDEO_ENCODING:
@@ -5503,6 +5617,11 @@ static int vidioc_querymenu(struct file *file, void *priv,
 			return 0;
 		}
 		break;
+	case S2226_CID_AUDIOROUTE:
+		if (qmenu->index > 3)
+			return -EINVAL;
+		strlcpy(qmenu->name, route[qmenu->index], sizeof(qmenu->name));
+		return 0;
 	case V4L2_CID_MPEG_AUDIO_MODE:
 		if ((qmenu->index != V4L2_MPEG_AUDIO_MODE_STEREO) &&
 		    (qmenu->index != V4L2_MPEG_AUDIO_MODE_MONO)) {
@@ -5540,6 +5659,54 @@ static int vidioc_try_ext_ctrls(struct file *file, void *priv,
 			else if (ctrl->value > 0x40)
 				ctrl->value = 0x40;
 			break;
+		case S2226_CID_AUDIN_BAL_R:
+		case S2226_CID_AUDIN_BAL_L:
+		case S2226_CID_AUDIN_AGC_ON_R:
+		case S2226_CID_AUDIN_AGC_ON_L:
+		case S2226_CID_AUDOUT_DACMUTE_R:
+		case S2226_CID_AUDOUT_DACMUTE_L:
+		case S2226_CID_AUDOUT_MONO_MUTE:
+		case S2226_CID_AUDOUT_HP_MUTE_R:
+		case S2226_CID_AUDOUT_HP_MUTE_L:
+		case S2226_CID_AUDOUT_STEREO_MUTE_R:
+		case S2226_CID_AUDOUT_STEREO_MUTE_L:
+			if (ctrl->value < 0)
+				ctrl->value = 0;
+			else if (ctrl->value > 1)
+				ctrl->value = 1;
+			break;
+		case S2226_CID_AUDOUT_MONO_GAIN:
+		case S2226_CID_AUDOUT_HP_GAIN_L:
+		case S2226_CID_AUDOUT_HP_GAIN_R:
+		case S2226_CID_AUDOUT_STEREO_GAIN_L:
+		case S2226_CID_AUDOUT_STEREO_GAIN_R:
+			if (ctrl->value > 9)
+				ctrl->value = 9;
+			else if (ctrl->value < 0)
+				ctrl->value = 0;
+			break;
+		case S2226_CID_AUDOUT_DACVOL_R:
+		case S2226_CID_AUDOUT_DACVOL_L:
+			if (ctrl->value > 127)
+				ctrl->value = 127;
+			else if (ctrl->value < 0)
+				ctrl->value = 0;
+			break;
+		case S2226_CID_AUDIN_GAIN_R:
+		case S2226_CID_AUDIN_GAIN_L:
+		case S2226_CID_AUDIN_AGC_GAIN_R:
+		case S2226_CID_AUDIN_AGC_GAIN_L:
+			if (ctrl->value < 0)
+				ctrl->value = 0;
+			else if (ctrl->value > 118)
+				ctrl->value = 118;
+			break;
+		case S2226_CID_AUDIOROUTE:
+			if (ctrl->value < 0)
+				ctrl->value = 0;
+			else if (ctrl->value > AUDIOROUTE_LINE2L_BYPASS)
+				ctrl->value = AUDIOROUTE_LINE2L_BYPASS;
+			break;
 		case V4L2_CID_AUDIO_BALANCE:
 			if (ctrl->value < -100)
 				ctrl->value = -100;
@@ -5555,12 +5722,10 @@ static int vidioc_try_ext_ctrls(struct file *file, void *priv,
 		case V4L2_CID_MPEG_AUDIO_MODE:
 			ctrl->value = V4L2_MPEG_AUDIO_MODE_STEREO;
 			break;
-#if 0
 		case V4L2_CID_MPEG_VIDEO_GOP_CLOSURE:
 			if (ctrl->value != 0)
 				ctrl->value = 1;
 			break;
-#endif
 		case V4L2_CID_MPEG_VIDEO_BITRATE:
 			if (ctrl->value < S2226_MIN_VBITRATE * 1000)
 				ctrl->value = S2226_MIN_VBITRATE * 1000;
@@ -5648,6 +5813,75 @@ static int vidioc_g_ext_ctrls(struct file *file, void *priv,
 		case V4L2_CID_HUE:
 			ctrl->value = dev->hue;
 			break;
+		case S2226_CID_AUDIOROUTE:
+			ctrl->value = dev->aud.iRoute;
+			break;
+		case S2226_CID_AUDIN_GAIN_L:
+			ctrl->value = dev->aud.iLeftGain;
+			break;
+		case S2226_CID_AUDIN_GAIN_R:
+			ctrl->value = dev->aud.iRightGain;
+			break;
+		case S2226_CID_AUDIN_AGC_GAIN_R:
+			ctrl->value = dev->aud.iAGCRightGain;
+			break;
+		case S2226_CID_AUDIN_AGC_GAIN_L:
+			ctrl->value = dev->aud.iAGCLeftGain;
+			break;
+		case S2226_CID_AUDIN_AGC_ON_L:
+			ctrl->value = dev->aud.bAGC_L;
+			break;
+		case S2226_CID_AUDIN_AGC_ON_R:
+			ctrl->value = dev->aud.bAGC_R;
+			break;
+		case S2226_CID_AUDIN_BAL_L:
+			ctrl->value = dev->aud.in_balL;
+			break;
+		case S2226_CID_AUDIN_BAL_R:
+			ctrl->value = dev->aud.in_balR;
+			break;
+		case S2226_CID_AUDOUT_DACVOL_R:
+			ctrl->value = dev->aud.iVolGainR;
+			break;
+		case S2226_CID_AUDOUT_DACVOL_L:
+			ctrl->value = dev->aud.iVolGainL;
+			break;
+		case S2226_CID_AUDOUT_DACMUTE_R:
+			ctrl->value = dev->aud.bVolMuteR;
+			break;
+		case S2226_CID_AUDOUT_DACMUTE_L:
+			ctrl->value = dev->aud.bVolMuteL;
+			break;
+		case S2226_CID_AUDOUT_MONO_MUTE:
+			ctrl->value = dev->aud.bMonoMute;
+			break;
+		case S2226_CID_AUDOUT_HP_MUTE_R:
+			ctrl->value = dev->aud.bHpMuteR;
+			break;
+		case S2226_CID_AUDOUT_HP_MUTE_L:
+			ctrl->value = dev->aud.bHpMuteL;
+			break;
+		case S2226_CID_AUDOUT_STEREO_MUTE_R:
+			ctrl->value = dev->aud.bStereoMuteR;
+			break;
+		case S2226_CID_AUDOUT_STEREO_MUTE_L:
+			ctrl->value = dev->aud.bStereoMuteL;
+			break;
+		case S2226_CID_AUDOUT_MONO_GAIN:
+			ctrl->value = dev->aud.iMonoGain;
+			break;
+		case S2226_CID_AUDOUT_HP_GAIN_R:
+			ctrl->value = dev->aud.iHpGainR;
+			break;
+		case S2226_CID_AUDOUT_HP_GAIN_L:
+			ctrl->value = dev->aud.iHpGainL;
+			break;
+		case S2226_CID_AUDOUT_STEREO_GAIN_R:
+			ctrl->value = dev->aud.iStereoGainR;
+			break;
+		case S2226_CID_AUDOUT_STEREO_GAIN_L:
+			ctrl->value = dev->aud.iStereoGainL;
+			break;
 		default:
 			return -EINVAL;
 		}
@@ -5683,6 +5917,35 @@ static int vidioc_s_ext_ctrls(struct file *file, void *priv,
 		case V4L2_CID_HUE:
 			s2226_set_hue(dev, ctrl->value);
 			break;
+		case S2226_CID_AUDIN_BAL_R:
+			SetAudioBalR(dev, ctrl->value);
+			break;
+		case S2226_CID_AUDIN_BAL_L:
+			SetAudioBalL(dev, ctrl->value);
+			break;
+		case S2226_CID_AUDIN_AGC_ON_R:
+			SetAudioRightAGC(dev, ctrl->value, dev->aud.iAGCRightGain);
+			break;
+		case S2226_CID_AUDIN_AGC_ON_L:
+			SetAudioLeftAGC(dev, ctrl->value, dev->aud.iAGCLeftGain);
+			break;
+		case S2226_CID_AUDIN_GAIN_R:
+			SetAudioRightGain(dev, ctrl->value);
+			break;
+		case S2226_CID_AUDIN_GAIN_L:
+			SetAudioLeftGain(dev, ctrl->value);
+			break;
+		case S2226_CID_AUDIN_AGC_GAIN_R:
+			SetAudioRightAGC(dev, dev->aud.bAGC_R,
+					 ctrl->value);
+			break;
+		case S2226_CID_AUDIN_AGC_GAIN_L:
+			SetAudioLeftAGC(dev, dev->aud.bAGC_L,
+					ctrl->value);
+			break;
+		case S2226_CID_AUDIOROUTE:
+			SetAudioRoute(dev, ctrl->value);
+			break;
 		case V4L2_CID_MPEG_STREAM_TYPE:
 			break;
 		case V4L2_CID_MPEG_VIDEO_ENCODING:
@@ -5717,6 +5980,83 @@ static int vidioc_s_ext_ctrls(struct file *file, void *priv,
 				dev->h51_mode.aBitrate = 256;
 				break;
 			}
+			break;
+		case S2226_CID_AUDOUT_DACVOL_L:
+			SetAudioVol(dev, dev->aud.iVolGainR,
+				    ctrl->value, dev->aud.bVolMuteL,
+				    dev->aud.bVolMuteR);
+			break;
+		case S2226_CID_AUDOUT_DACVOL_R:
+			SetAudioVol(dev, ctrl->value,
+				    dev->aud.iVolGainL, dev->aud.bVolMuteL,
+				    dev->aud.bVolMuteR);
+			break;
+		case S2226_CID_AUDOUT_DACMUTE_L:
+			SetAudioVol(dev, dev->aud.iVolGainR,
+				    dev->aud.iVolGainL, ctrl->value,
+				    dev->aud.bVolMuteR);
+			break;
+		case S2226_CID_AUDOUT_DACMUTE_R:
+			SetAudioVol(dev, dev->aud.iVolGainR,
+				    dev->aud.iVolGainL, dev->aud.bVolMuteL,
+				    ctrl->value);
+			break;
+		case S2226_CID_AUDOUT_MONO_MUTE:
+			SetAudioMono(dev, dev->aud.iMonoGain, ctrl->value);
+			break;
+		case S2226_CID_AUDOUT_MONO_GAIN:
+			SetAudioMono(dev, ctrl->value, dev->aud.bMonoMute);
+			break;
+			
+		case S2226_CID_AUDOUT_HP_MUTE_R:
+			SetAudioHp(dev, dev->aud.iHpGainL,
+				   dev->aud.iHpGainR, dev->aud.bHpMuteL,
+				   ctrl->value);
+			break;
+		case S2226_CID_AUDOUT_HP_MUTE_L:
+			SetAudioHp(dev, dev->aud.iHpGainL,
+				   dev->aud.iHpGainR, ctrl->value,
+				   dev->aud.bHpMuteR);
+			break;
+		case S2226_CID_AUDOUT_HP_GAIN_L:
+			SetAudioHp(dev, ctrl->value,
+				   dev->aud.iHpGainR,
+				   dev->aud.bHpMuteL,
+				   dev->aud.bHpMuteR);
+			break;
+		case S2226_CID_AUDOUT_HP_GAIN_R:
+			SetAudioHp(dev, dev->aud.iHpGainL,
+				   ctrl->value,
+				   dev->aud.bHpMuteL,
+				   dev->aud.bHpMuteR);
+			break;
+		case S2226_CID_AUDOUT_STEREO_GAIN_L:
+			SetAudioStereo(dev,
+				       ctrl->value,
+				       dev->aud.iStereoGainR,
+				       dev->aud.bStereoMuteL,
+				       dev->aud.bStereoMuteR);
+			break;
+		case S2226_CID_AUDOUT_STEREO_GAIN_R:
+			SetAudioStereo(dev,
+				       dev->aud.iStereoGainL,
+				       ctrl->value,
+				       dev->aud.bStereoMuteL,
+				       dev->aud.bStereoMuteR);
+			break;
+		case S2226_CID_AUDOUT_STEREO_MUTE_R:
+			SetAudioStereo(dev,
+				       dev->aud.iStereoGainL,
+				       dev->aud.iStereoGainR,
+				       dev->aud.bStereoMuteL,
+				       ctrl->value);
+			break;
+		case S2226_CID_AUDOUT_STEREO_MUTE_L:
+			SetAudioStereo(dev,
+				       dev->aud.iStereoGainL,
+				       dev->aud.iStereoGainR,
+				       ctrl->value,
+				       dev->aud.bStereoMuteR);
 			break;
 		default:
 			return -EINVAL;
