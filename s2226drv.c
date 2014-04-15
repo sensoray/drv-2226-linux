@@ -147,6 +147,20 @@
 #define S2226_DEF_PREVIEW_X 320
 #define S2226_DEF_PREVIEW_Y 240
 
+/* audio muxing */
+#define AMUX_MPEG_IN_LINE_IN 0   /* MPEG-In  gets Line-In */
+#define AMUX_MPEG_IN_TONE 1      /* MPEG-In  gets Tone Test */
+#define AMUX_MPEG_IN_SDI_IN 2    /* MPEG-In  gets SDI-In embedded audio*/
+#define AMUX_LINE_OUT_LINE_IN 0  /* Line-Out gets Line-In */
+#define AMUX_LINE_OUT_MPEG_OUT 1 /* Line-Out gets MPEG-Out */
+#define AMUX_LINE_OUT_SDI_IN 2   /* Line-Out gets SDI-In embedded audio */
+#define AMUX_SDI_OUT_LINE_IN 0   /* SDI-Out  gets Line-In */
+#define AMUX_SDI_OUT_MPEG_OUT 1  /* SDI-Out  gets MPEG-Out */
+#define AMUX_SDI_OUT_TONE 2      /* SDI-Out  gets Tone Test */
+#define AMUX_SDI_OUT_SDI_IN 3    /* SDI-Out  gets SDI-In embedded audio */
+
+
+
 /* table of devices that work with this driver */
 static struct usb_device_id s2226_table[] = {
 	{ USB_DEVICE(USB_S2226_VENDOR_ID, USB_S2226_PRODUCT_ID) },
@@ -229,6 +243,8 @@ static int SetAudioLeftAGC(struct s2226_dev *dev, int bOn, int gain);
 static int SetAudioBalR(struct s2226_dev *dev, int bBal);
 static int SetAudioBalL(struct s2226_dev *dev, int bBal);
 static int s2226_set_audiomux_mpegin(struct s2226_dev *dev, int aud);
+static int s2226_set_audiomux_lineout(struct s2226_dev *dev, int aud);
+static int s2226_set_audiomux_sdiout(struct s2226_dev *dev, int aud);
 #define S2226_STREAM_MPEG 0 /* MPEG H.264 in MPEG-TS container */
 
 /* 2226 raw preview video stream. downscaled for USB2.0 */
@@ -446,7 +462,11 @@ struct s2226_dev {
 	int			control_ready;
 	struct MODE2226		h51_mode;
 	int			cur_input;
-	int                     cur_audiompeg; /* current audio input */
+
+	int                     cur_audio_mpeg; /* current audio input */
+	int                     cur_audio_lineout;
+	int                     cur_audio_sdiout;
+
 	int                     is_decode; /* set to decode input */
 	int                     input_set;
 	unsigned                id; /* message id */
@@ -2269,7 +2289,9 @@ static int s2226_new_input(struct s2226_dev *dev, int input)
 		SetAudioIn(dev);
 		SetAudioRoute(dev, dev->aud.iRoute);
 		SetAudioOut(dev);
-		(void) s2226_set_audiomux_mpegin(dev, dev->cur_audiompeg);
+		(void) s2226_set_audiomux_mpegin(dev, dev->cur_audio_mpeg);
+		(void) s2226_set_audiomux_lineout(dev, dev->cur_audio_lineout);
+		(void) s2226_set_audiomux_sdiout(dev, dev->cur_audio_sdiout);
 	}
 	dprintk(2, "%s: input %d rc %d\n", __func__, input, rc);
 	return rc;
@@ -2303,6 +2325,63 @@ static int s2226_set_audiomux_mpegin(struct s2226_dev *dev, int aud)
 		return -EINVAL;
 	}
 	rc = send_fpga_write(dev, S2226_REG_AUD_INPK_CTL, reg);
+	return rc;
+}
+
+static int s2226_set_audiomux_lineout(struct s2226_dev *dev, int aud)
+{
+	int reg;
+	int rc;
+	rc = get_reg(dev, DEVID_FPGA, S2226_REG_AUD_INPK_CTL, &reg);
+	if (rc != 0)
+		dev_warn(&dev->udev->dev, "s2226 setaudio mux fail\n");
+
+	switch (aud) {
+	case AMUX_LINE_OUT_MPEG_OUT:
+		reg &= ~0x000C; /* Bit 2,3 select what is going to Line-Out */
+		reg |=  0x0000; /* Line-Out gets MPEG-Out */
+		break;
+	case AMUX_LINE_OUT_SDI_IN:
+		reg &= ~0x000C;
+		reg |=  0x0004;
+		break;
+	case AMUX_LINE_OUT_LINE_IN:
+		reg &= ~0x000C; // Bit 2,3 selects what is going to Line-Out
+		reg |=  0x0008; // Line-Out gets Line-In embedded audio
+		break;
+	default:
+		dprintk(0, "s2226 setaudio mux, invalid input %d\n", aud);
+		return -EINVAL;
+	}
+	dev->cur_audio_lineout = aud;
+	rc = send_fpga_write(dev, S2226_REG_AUD_INPK_CTL, reg);
+	return rc;
+}
+
+#define S2226_REG_AUD_OUTPK_CTL (0x01A<<1)
+static int s2226_set_audiomux_sdiout(struct s2226_dev *dev, int aud)
+{
+	int reg;
+	int rc;
+	switch (aud) {
+	case AMUX_SDI_OUT_LINE_IN:
+		reg = 0x83;
+		break;
+	case AMUX_SDI_OUT_MPEG_OUT:
+		reg = 0xC3;
+		break;
+	case AMUX_SDI_OUT_TONE:
+		reg = 0x82;
+		break;
+	case AMUX_SDI_OUT_SDI_IN:
+		reg = 0x00;
+		break;
+	default:
+		dprintk(0, "s2226 setaudio mux, invalid input %d\n", aud);
+		return -EINVAL;
+	}
+	rc = send_fpga_write(dev, S2226_REG_AUD_OUTPK_CTL, reg);
+	dev->cur_audio_lineout = aud;
 	return rc;
 }
 
@@ -3232,6 +3311,9 @@ static int s2226_probe(struct usb_interface *interface,
 	dev->hue = 0;
 	dev->saturation = 0x40;
 	dev->contrast = 0x40;
+	dev->cur_audio_mpeg = AMUX_MPEG_IN_LINE_IN;
+	dev->cur_audio_lineout = AMUX_LINE_OUT_MPEG_OUT;
+	dev->cur_audio_sdiout = AMUX_SDI_OUT_MPEG_OUT;
 	s2226_probe_v4l(dev);
 	s2226_get_fpga_ver(dev);
 	s2226_set_interface(dev, 0, 1, 1);
@@ -5271,7 +5353,7 @@ static int vidioc_g_audio(struct file *file, void *priv,
 	struct s2226_stream *strm = video_drvdata(file);
 	struct s2226_dev *dev = strm->dev;
 	memset(aud, 0, sizeof(struct v4l2_audio));
-	switch (dev->cur_audiompeg) {
+	switch (dev->cur_audio_mpeg) {
 	case S2226_AUDIOINPUT_LINE:
 		strcpy(aud->name, "Line In");
 		break;
@@ -5282,7 +5364,7 @@ static int vidioc_g_audio(struct file *file, void *priv,
 		strcpy(aud->name, "SDI Embedded Audio");
 		break;
 	}
-	aud->index = dev->cur_audiompeg;
+	aud->index = dev->cur_audio_mpeg;
 	return 0;
 }
 
@@ -5299,8 +5381,8 @@ static int vidioc_s_audio(struct file *file, void *priv,
 
 	if (aud->index >= S2226_AUDIOINPUT_MAX)
 		return -EINVAL;
-	dev->cur_audiompeg = aud->index;
-	(void) s2226_set_audiomux_mpegin(dev, dev->cur_audiompeg);
+	dev->cur_audio_mpeg = aud->index;
+	(void) s2226_set_audiomux_mpegin(dev, dev->cur_audio_mpeg);
 	return 0;
 }
 
@@ -5376,7 +5458,9 @@ static int vidioc_queryctrl(struct file *file, void *priv,
 		S2226_CID_AUDOUT_STEREO_MUTE_R,
 		S2226_CID_AUDOUT_STEREO_MUTE_L,
 
-
+		S2226_CID_AUDMUX_MPEGIN,
+		S2226_CID_AUDMUX_LINEOUT,
+		S2226_CID_AUDMUX_SDIOUT,
 		0
 	};
 
@@ -5410,7 +5494,9 @@ static int vidioc_queryctrl(struct file *file, void *priv,
 		S2226_CID_AUDOUT_STEREO_MUTE_R,
 		S2226_CID_AUDOUT_STEREO_MUTE_L,
 
-
+		S2226_CID_AUDMUX_MPEGIN,
+		S2226_CID_AUDMUX_LINEOUT,
+		S2226_CID_AUDMUX_SDIOUT,
 		0
 	};
 	/* must be in increasing order */
@@ -5527,6 +5613,18 @@ static int vidioc_queryctrl(struct file *file, void *priv,
 	case S2226_CID_AUDIOROUTE:
 		ctrl_fill(ctrl, V4L2_CTRL_TYPE_MENU, "Audio Route", 0, 3, 1, 0, 0);
 		break;
+	case S2226_CID_AUDMUX_MPEGIN:
+		ctrl_fill(ctrl, V4L2_CTRL_TYPE_MENU, "Audio Mux MPEG In", 0, 2, 1,
+			  AMUX_MPEG_IN_LINE_IN, 0);
+		break;
+	case S2226_CID_AUDMUX_LINEOUT:
+		ctrl_fill(ctrl, V4L2_CTRL_TYPE_MENU, "Audio Mux Line Out", 0, 2, 1,
+			  AMUX_LINE_OUT_MPEG_OUT, 0);
+		break;
+	case S2226_CID_AUDMUX_SDIOUT:
+		ctrl_fill(ctrl, V4L2_CTRL_TYPE_MENU, "Audio Mux SDI Out", 0, 3, 1,
+			  AMUX_SDI_OUT_MPEG_OUT, 0);
+		break;
 	case V4L2_CID_BRIGHTNESS:
 		v4l2_ctrl_query_fill(ctrl, 0, 255, 1, DEF_BRIGHT);
 		break;
@@ -5594,6 +5692,22 @@ static int vidioc_querymenu(struct file *file, void *priv,
 		"Audio Line1 Bypass",
 		"Audio Line2 Bypass",
 	};
+	static const char *audmux_mpegin[] = {
+		"Line In",
+		"Test Tone",
+		"SDI In",
+	};
+	static const char *audmux_lineout[] = {
+		"Line In",
+		"Mpeg Out",
+		"SDI In",
+	};
+	static const char *audmux_sdiout[] = {
+		"Line In",
+		"Mpeg Out",
+		"Test Tone",
+		"SDI In",
+	};
 
 	switch (qmenu->id) {
 /*	case V4L2_CID_MPEG_STREAM_TYPE:*/
@@ -5621,6 +5735,21 @@ static int vidioc_querymenu(struct file *file, void *priv,
 		if (qmenu->index > 3)
 			return -EINVAL;
 		strlcpy(qmenu->name, route[qmenu->index], sizeof(qmenu->name));
+		return 0;
+	case S2226_CID_AUDMUX_MPEGIN:
+		if (qmenu->index > 2)
+			return -EINVAL;
+		strlcpy(qmenu->name, audmux_mpegin[qmenu->index], sizeof(qmenu->name));
+		return 0;
+	case S2226_CID_AUDMUX_LINEOUT:
+		if (qmenu->index > 2)
+			return -EINVAL;
+		strlcpy(qmenu->name, audmux_lineout[qmenu->index], sizeof(qmenu->name));
+		return 0;
+	case S2226_CID_AUDMUX_SDIOUT:
+		if (qmenu->index > 3)
+			return -EINVAL;
+		strlcpy(qmenu->name, audmux_sdiout[qmenu->index], sizeof(qmenu->name));
 		return 0;
 	case V4L2_CID_MPEG_AUDIO_MODE:
 		if ((qmenu->index != V4L2_MPEG_AUDIO_MODE_STEREO) &&
@@ -5706,6 +5835,19 @@ static int vidioc_try_ext_ctrls(struct file *file, void *priv,
 				ctrl->value = 0;
 			else if (ctrl->value > AUDIOROUTE_LINE2L_BYPASS)
 				ctrl->value = AUDIOROUTE_LINE2L_BYPASS;
+			break;
+		case S2226_CID_AUDMUX_LINEOUT:
+		case S2226_CID_AUDMUX_MPEGIN:
+			if (ctrl->value < 0)
+				ctrl->value = 0;
+			else if (ctrl->value > 2)
+				ctrl->value = 2;
+			break;
+		case S2226_CID_AUDMUX_SDIOUT:
+			if (ctrl->value < 0)
+				ctrl->value = 0;
+			else if (ctrl->value > 3)
+				ctrl->value = 3;
 			break;
 		case V4L2_CID_AUDIO_BALANCE:
 			if (ctrl->value < -100)
@@ -5882,6 +6024,15 @@ static int vidioc_g_ext_ctrls(struct file *file, void *priv,
 		case S2226_CID_AUDOUT_STEREO_GAIN_L:
 			ctrl->value = dev->aud.iStereoGainL;
 			break;
+		case S2226_CID_AUDMUX_MPEGIN:
+			ctrl->value = dev->cur_audio_mpeg;
+			break;
+		case S2226_CID_AUDMUX_LINEOUT:
+			ctrl->value = dev->cur_audio_lineout;
+			break;
+		case S2226_CID_AUDMUX_SDIOUT:
+			ctrl->value = dev->cur_audio_sdiout;
+			break;
 		default:
 			return -EINVAL;
 		}
@@ -6057,6 +6208,16 @@ static int vidioc_s_ext_ctrls(struct file *file, void *priv,
 				       dev->aud.iStereoGainR,
 				       ctrl->value,
 				       dev->aud.bStereoMuteR);
+			break;
+		case S2226_CID_AUDMUX_MPEGIN:
+			dev->cur_audio_mpeg = ctrl->value;
+			(void) s2226_set_audiomux_mpegin(dev, dev->cur_audio_mpeg);
+			break;
+		case S2226_CID_AUDMUX_LINEOUT:
+			(void) s2226_set_audiomux_lineout(dev, ctrl->value);
+			break;
+		case S2226_CID_AUDMUX_SDIOUT:
+			(void) s2226_set_audiomux_sdiout(dev, ctrl->value);
 			break;
 		default:
 			return -EINVAL;

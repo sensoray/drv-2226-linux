@@ -50,7 +50,12 @@
 #define S2226_CID_AUDOUT_STEREO_MUTE_R (S2226_CID_BASE + 22)
 #define S2226_CID_AUDOUT_STEREO_MUTE_L (S2226_CID_BASE + 23)
 
-
+/* select source feeding the mpeg in */
+#define S2226_CID_AUDMUX_MPEGIN (S2226_CID_BASE + 24)
+/* select source feeding the audio line out */
+#define S2226_CID_AUDMUX_LINEOUT (S2226_CID_BASE + 25)
+/* select source feeding the sdi out */
+#define S2226_CID_AUDMUX_SDIOUT (S2226_CID_BASE + 26)
 
 typedef struct {
         int idx;
