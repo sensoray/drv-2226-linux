@@ -10,52 +10,123 @@
 
 #define S2226_CID_BASE (V4L2_CTRL_CLASS_USER | 0x1070)
 
-
 /* audio routing */
 #define S2226_CID_AUDIOROUTE (S2226_CID_BASE + 1)
+/* select source feeding the mpeg in */
+#define S2226_CID_AUDMUX_MPEGIN (S2226_CID_BASE + 2)
+/* select source feeding the audio line out */
+#define S2226_CID_AUDMUX_LINEOUT (S2226_CID_BASE + 3)
+/* select source feeding the sdi out */
+#define S2226_CID_AUDMUX_SDIOUT (S2226_CID_BASE + 4)
+
 
 /* audio input settings (individual left/right channel control */
 /* AGC on: whether to turn AGC on or off */
-#define S2226_CID_AUDIN_AGC_ON_R (S2226_CID_BASE + 2) /*right*/
-#define S2226_CID_AUDIN_AGC_ON_L (S2226_CID_BASE + 3) /*left*/
+
+#define S2226_CTRL_CLASS_AUDIN 0x00bc0000
+#define S2226_CID_AUDIN_BASE (S2226_CTRL_CLASS_AUDIN | 0x900)
+#define S2226_CID_AUDIN_CLASS (S2226_CTRL_CLASS_AUDIN | 1)
+
+#define S2226_CID_AUDIN_AGC_ON_R (S2226_CID_AUDIN_BASE + 1) /*right*/
+#define S2226_CID_AUDIN_AGC_ON_L (S2226_CID_AUDIN_BASE + 2) /*left*/
 /* AGC gain (this is different from non-AGC gain) */
-#define S2226_CID_AUDIN_AGC_GAIN_R (S2226_CID_BASE + 4) /*right*/
-#define S2226_CID_AUDIN_AGC_GAIN_L (S2226_CID_BASE + 5) /*left*/
+#define S2226_CID_AUDIN_AGC_GAIN_R (S2226_CID_AUDIN_BASE + 3) /*right*/
+#define S2226_CID_AUDIN_AGC_GAIN_L (S2226_CID_AUDIN_BASE + 4) /*left*/
 /* audio balanced(differential) settings */
 /* 0 is default.  1 for balanced audio inputs */
-#define S2226_CID_AUDIN_BAL_R (S2226_CID_BASE + 6) /*right*/
-#define S2226_CID_AUDIN_BAL_L (S2226_CID_BASE + 7) /*left*/
-/* standard audio gain (different from AGC gain) */
-#define S2226_CID_AUDIN_GAIN_R (S2226_CID_BASE + 8) /*right*/
-#define S2226_CID_AUDIN_GAIN_L (S2226_CID_BASE + 9) /*left*/
 
+#define S2226_CID_AUDIN_BAL_L (S2226_CID_AUDIN_BASE + 5) /*left*/
+#define S2226_CID_AUDIN_BAL_R (S2226_CID_AUDIN_BASE + 6) /*right*/
+
+/* standard audio gain (different from AGC gain) */
+#define S2226_CID_AUDIN_GAIN_L (S2226_CID_AUDIN_BASE + 7) /*left*/
+#define S2226_CID_AUDIN_GAIN_R (S2226_CID_AUDIN_BASE + 8) /*right*/
+
+
+
+/* audio output settings */
+#define S2226_CTRL_CLASS_AUDOUT 0x00bd0000
+#define S2226_CID_AUDOUT_BASE (S2226_CTRL_CLASS_AUDOUT | 0x900)
+#define S2226_CID_AUDOUT_CLASS (S2226_CTRL_CLASS_AUDOUT | 1)
 
 /* audio output settings DAC (digital to audio for playback) volume */
-#define S2226_CID_AUDOUT_DACVOL_R (S2226_CID_BASE + 10)/*DAC volume right*/
-#define S2226_CID_AUDOUT_DACVOL_L (S2226_CID_BASE + 11)/*DAC volume left*/
+#define S2226_CID_AUDOUT_DACVOL_L (S2226_CID_AUDOUT_BASE + 1)/*DAC volume left*/
+#define S2226_CID_AUDOUT_DACVOL_R (S2226_CID_AUDOUT_BASE + 2)/*DAC volume right*/
 /* mute the DAC output audio */
-#define S2226_CID_AUDOUT_DACMUTE_R (S2226_CID_BASE + 12)/*DAC mute right*/
-#define S2226_CID_AUDOUT_DACMUTE_L (S2226_CID_BASE + 13)/*DAC mute left*/
+#define S2226_CID_AUDOUT_DACMUTE_L (S2226_CID_AUDOUT_BASE + 3)/*DAC mute left*/
+#define S2226_CID_AUDOUT_DACMUTE_R (S2226_CID_AUDOUT_BASE + 4)/*DAC mute right*/
 
-#define S2226_CID_AUDOUT_MONO_GAIN (S2226_CID_BASE + 14)
-#define S2226_CID_AUDOUT_MONO_MUTE (S2226_CID_BASE + 15)
 
-#define S2226_CID_AUDOUT_HP_GAIN_R (S2226_CID_BASE + 16)
-#define S2226_CID_AUDOUT_HP_GAIN_L (S2226_CID_BASE + 17)
-#define S2226_CID_AUDOUT_HP_MUTE_R (S2226_CID_BASE + 18)
-#define S2226_CID_AUDOUT_HP_MUTE_L (S2226_CID_BASE + 19)
+#define S2226_CID_AUDOUT_MONO_GAIN (S2226_CID_AUDOUT_BASE + 5)
+#define S2226_CID_AUDOUT_MONO_MUTE (S2226_CID_AUDOUT_BASE + 6)
 
-#define S2226_CID_AUDOUT_STEREO_GAIN_R (S2226_CID_BASE + 20)
-#define S2226_CID_AUDOUT_STEREO_GAIN_L (S2226_CID_BASE + 21)
-#define S2226_CID_AUDOUT_STEREO_MUTE_R (S2226_CID_BASE + 22)
-#define S2226_CID_AUDOUT_STEREO_MUTE_L (S2226_CID_BASE + 23)
+#define S2226_CID_AUDOUT_HP_GAIN_L (S2226_CID_AUDOUT_BASE + 7)
+#define S2226_CID_AUDOUT_HP_GAIN_R (S2226_CID_AUDOUT_BASE + 8)
 
-/* select source feeding the mpeg in */
-#define S2226_CID_AUDMUX_MPEGIN (S2226_CID_BASE + 24)
-/* select source feeding the audio line out */
-#define S2226_CID_AUDMUX_LINEOUT (S2226_CID_BASE + 25)
-/* select source feeding the sdi out */
-#define S2226_CID_AUDMUX_SDIOUT (S2226_CID_BASE + 26)
+#define S2226_CID_AUDOUT_HP_MUTE_L (S2226_CID_AUDOUT_BASE + 9)
+#define S2226_CID_AUDOUT_HP_MUTE_R (S2226_CID_AUDOUT_BASE + 10)
+
+
+#define S2226_CID_AUDOUT_STEREO_GAIN_L (S2226_CID_AUDOUT_BASE + 11)
+#define S2226_CID_AUDOUT_STEREO_GAIN_R (S2226_CID_AUDOUT_BASE + 12)
+
+#define S2226_CID_AUDOUT_STEREO_MUTE_L (S2226_CID_AUDOUT_BASE + 13)
+#define S2226_CID_AUDOUT_STEREO_MUTE_R (S2226_CID_AUDOUT_BASE + 14)
+
+
+
+/* audio meter */
+#define S2226_CTRL_CLASS_AUDMTR 0x00be0000
+#define S2226_CID_AUDMTR_BASE (S2226_CTRL_CLASS_AUDMTR | 0x900)
+#define S2226_CID_AUDMTR_CLASS (S2226_CTRL_CLASS_AUDMTR | 1)
+
+#define S2226_CID_AUDMTR_CHANNEL (S2226_CID_AUDMTR_BASE + 1)
+/** Get Audio Meter Peak and Decayed Level 
+ * 23-bits, unsigned binary 0=min volume
+ */
+
+#define S2226_CID_AUDMTR_LEVEL_L (S2226_CID_AUDMTR_BASE + 2) /*left*/
+#define S2226_CID_AUDMTR_LEVEL_R (S2226_CID_AUDMTR_BASE + 3) /*right*/
+
+/** Get Audio Meter Peak and Decayed Level in dB
+ * 11-bits, unsigned binary 0=max volume 
+ * 2048 steps, -0.1 db each
+ */
+#define S2226_CID_AUDMTR_LEVELDB_L (S2226_CID_AUDMTR_BASE + 4)
+#define S2226_CID_AUDMTR_LEVELDB_R (S2226_CID_AUDMTR_BASE + 5)
+
+
+
+
+/* audio meter hold release 
+ * 1 = force release of 'held' output
+ * 0 = allow holding of highest db value per the set hold time
+ */
+#define S2226_CID_AUDMTR_HOLDREL (S2226_CID_AUDMTR_BASE + 6)
+/* audio meter hold time */
+#define S2226_CID_AUDMTR_HOLDTIME (S2226_CID_AUDMTR_BASE + 7)
+
+
+/* hold value left and right side */
+/*
+ * hld  : 11-bits, unsigned binary 0=max volume. 2048 steps, -0.1 db each
+ * clip : 1 indicates (0x7FFFFF or 0x800000 detected)
+ */
+#define S2226_CID_AUDMTR_HOLD_L (S2226_CID_AUDMTR_BASE + 8)
+#define S2226_CID_AUDMTR_HOLD_R (S2226_CID_AUDMTR_BASE + 9)
+/* clip detect */
+#define S2226_CID_AUDMTR_CLIP_L (S2226_CID_AUDMTR_BASE + 10)
+#define S2226_CID_AUDMTR_CLIP_R (S2226_CID_AUDMTR_BASE + 11)
+
+
+/* audio meter test settings 
+ * 0- disabled/normal mode (no TEST)
+ * 1- force to zero
+ * 2- force to clip
+ * 3- force to -6dB
+ */
+#define S2226_CID_AUDMTR_TEST (S2226_CID_AUDMTR_BASE + 12)
+
 
 typedef struct {
         int idx;
