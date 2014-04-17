@@ -368,7 +368,9 @@ struct s2226_stream {
 	int height;
 	int fourcc;
 	int width;
-    int field;
+	int field;
+	int single;
+	unsigned char *f1; /* tmp buffer for merging frames */
 	struct video_device vdev;
 	struct s2226_urb write_vid[WR_URBS];
 	struct s2226_urb read_vid[RD_URBS];
@@ -3194,6 +3196,7 @@ static void s2226_release(struct kref *kref)
 	}
 	usb_free_urb(dev->interrupt_urb);
 	usb_free_urb(dev->control_urb);
+    vfree(dev->p->f1);
 	kfree(dev);
 	pr_info("s2226 memory released\n");
 }
@@ -3445,6 +3448,11 @@ static int s2226_probe(struct usb_interface *interface,
 	dev->m->type = S2226_STREAM_MPEG;
 	dev->p->type = S2226_STREAM_PREVIEW;
 	dev->d->type = S2226_STREAM_DECODE;
+    dev->p->f1 = vmalloc(1920*1280);
+    if (dev->p->f1 == NULL) {
+		pr_info("s2226: out of memory");
+		goto error;
+    }
 	dev->fpga_ver = -1;
 	dev->cfg_intf = -1;
 	dev->alt_intf = -1;
@@ -4482,8 +4490,10 @@ static int s2226_got_preview_data(struct s2226_stream *strm, unsigned char *tbuf
 		tlen = buf->vb.bsize - strm->m_pos;
 #endif
 
+
 	memcpy(vbuf + strm->m_pos, tbuf, tlen);
 	strm->m_pos += tlen;
+
 #ifdef USE_VIDEOBUF2
 	if (strm->m_pos < vb2_get_plane_payload(&buf->vb, 0)) {
 		spin_unlock_irqrestore(&strm->qlock, flags);
@@ -4503,6 +4513,42 @@ static int s2226_got_preview_data(struct s2226_stream *strm, unsigned char *tbuf
 	list_del(&buf->vb.queue);
 #endif
 	spin_unlock_irqrestore(&strm->qlock, flags);
+
+	if (!strm->single && (strm->type == S2226_STREAM_PREVIEW)) {
+		int j;
+		unsigned char *pf1, *pf2;
+		unsigned char *pbuf;
+#ifdef USE_VIDEOBUF2
+		pf1 = vb2_plane_vaddr(&buf->vb, 0);
+#else
+		pf1 = videobuf_to_vmalloc(&buf->vb);
+#endif
+		pbuf = pf1;
+		pf2 = pf1 + strm->height * strm->width;
+		/* copy first field to temp store */
+		memcpy(strm->f1, pf1, strm->height*strm->width);
+
+		/* move second field into the frame */
+		for (j = 0; j < strm->height / 2; j++) {
+			pf1 += strm->width * 2;
+			memcpy(pf1, pf2, strm->width * 2);
+			pf2 += strm->width * 2;
+			pf1 += strm->width * 2;
+			if ((unsigned long) (pf1 - pbuf) >= (strm->width*strm->height*2))
+				break;
+		}
+		/* move first field back into the frame */
+		pf1 = strm->f1;
+		pf2 = pbuf;
+		for (j = 0; j < strm->height / 2; j++) {
+			memcpy(pf2, pf1, strm->width * 2);
+			pf2 += strm->width * 2;
+			pf2 += strm->width * 2;
+			pf1 += strm->width * 2;
+			if ((unsigned long) (pf2 - pbuf) >= (strm->width*strm->height*2))
+				break;
+		}
+	}
 
 #ifdef USE_VIDEOBUF2
 	buf->vb.v4l2_buf.length = vb2_get_plane_payload(&buf->vb, 0);
@@ -4806,8 +4852,8 @@ static void s2226_max_height_width(int input, int *h, int *w)
 	case INPUT_H51_SD_480I:
 	case INPUT_SDI_480I:
 	case INPUT_SDI_480I_CB:
-		*w = 480;
-		*h = 640;
+		*w = 640;
+		*h = 480;
 		return;
 	case INPUT_SDI_576I:
 	case INPUT_SDI_576I_CB:
@@ -4960,7 +5006,6 @@ static int vidioc_try_fmt_vid_cap(struct file *file, void *priv,
 			else
 				f->fmt.pix.field = V4L2_FIELD_INTERLACED;
 		}
-        //printk("field is now: %d\n", f->fmt.pix.field);
 		f->fmt.pix.pixelformat = V4L2_PIX_FMT_UYVY;
 		f->fmt.pix.height = h;
 		f->fmt.pix.width = w;
@@ -5053,17 +5098,22 @@ static int vidioc_s_fmt_vid_cap(struct file *file, void *priv,
 	strm->width = f->fmt.pix.width;
 	strm->height = f->fmt.pix.height;
 	strm->fourcc = f->fmt.pix.pixelformat;
-    strm->field = f->fmt.pix.field;
+	strm->field = f->fmt.pix.field;
 
 	s2226_set_attr(dev, ATTR_SCALE_X, f->fmt.pix.width);
-	s2226_set_attr(dev, ATTR_SCALE_Y, f->fmt.pix.height);
 
+	
 	if (IS_PROG_INPUT(dev->cur_input))
 		single = 1;
+
 	if (f->fmt.pix.field != V4L2_FIELD_INTERLACED)
 		single = 1;
+
+	strm->single = single;
+	//printk("single %d, height %d\n", single, f->fmt.pix.height);
+	s2226_set_attr(dev, ATTR_SCALE_Y, single ? f->fmt.pix.height : f->fmt.pix.height/2);
 	s2226_set_attr(dev, ATTR_SCALE_SINGLE, single);
-/*	s2226_set_attr(dev, ATTR_SCALED_OUTPUT, 0); */
+/*	s2226_set_attr(dev, ATTR_SCALED_OUTPUT, 0);*/
 	s2226_set_attr(dev, ATTR_MPEG_SCALER, 1);
 	dprintk(1, "setting x scale %d, yscale %d\n", f->fmt.pix.width, f->fmt.pix.height);
 	return 0;
@@ -6138,7 +6188,6 @@ static int vidioc_querymenu(struct file *file, void *priv,
 			memset(qmenu->name, 0, sizeof(qmenu->name));
 			return 0;
 		}
-
 	}
 	return v4l2_ctrl_query_menu(qmenu, NULL, NULL);
 }
@@ -6968,7 +7017,7 @@ static const struct v4l2_ioctl_ops s2226_ioctl_ops = {
 };
 
 static struct video_device template = {
-	.name = "s2226v4l",
+	.name = "s2226v4l_template",
 	.fops = &s2226_fops_v4l,
 	.ioctl_ops = &s2226_ioctl_ops,
 	.minor = -1,
@@ -7042,6 +7091,18 @@ static int s2226_probe_v4l(struct s2226_dev *dev)
 		dprintk(5, "queue init %d\n", i);
 		/* register MPEG video device */
 		strm->vdev = template;
+        switch (strm->type) {
+        case S2226_STREAM_MPEG:
+            strcpy(strm->vdev.name, "s2226v4l_h264");
+            break;
+        case S2226_STREAM_PREVIEW:
+            strcpy(strm->vdev.name, "s2226v4l_preview");
+            break;
+        case S2226_STREAM_DECODE:
+            strcpy(strm->vdev.name, "s2226v4l_decode");
+            break;
+        }
+
 		/* for locking purposes */
 #ifdef USE_VIDEOBUF2
 		strm->vdev.queue = q;
