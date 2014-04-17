@@ -522,7 +522,14 @@ class Demo:
 	
 	def set_ctrl(self, widget, id):
 		value = int(widget.value)
-		if V4L2_CTRL_ID2CLASS(id) != V4L2_CTRL_CLASS_USER:
+		if V4L2_CTRL_ID2CLASS(id) == V4L2_CTRL_CLASS_USER:
+			ctrl = v4l2_control()
+			ctrl.id = id
+			ctrl.value = value
+			dprint("new ctrl", id, "is", ctrl.value)
+			try: ioctl(self.vd, VIDIOC_S_CTRL, ctrl)
+			except IOError: print "unable to set control"
+		else:
 			ctrl = v4l2_ext_control()
 			ctrl.id = id
 			ctrl.value = value
@@ -531,16 +538,8 @@ class Demo:
 			ctrls.count = 1
 			ctrls.controls = ctypes.pointer(ctrl)
 			dprint("new ext ctrl", id, "is", ctrl.value)
-			try: 
-				ioctl(self.vd, VIDIOC_S_EXT_CTRLS, ctrls)
-				return ctrl.value
-			except IOError: pass
-		ctrl = v4l2_control()
-		ctrl.id = id
-		ctrl.value = value
-		dprint("new ctrl", id, "is", ctrl.value)
-		try: ioctl(self.vd, VIDIOC_S_CTRL, ctrl)
-		except IOError: print "unable to set control"
+			try: ioctl(self.vd, VIDIOC_S_EXT_CTRLS, ctrls)
+			except IOError: print "unable to set ext control"
 		return ctrl.value
 
 	def get_ctrl(self, cid):
@@ -599,6 +598,16 @@ class Demo:
 				adj.value = jpegcomp.quality
 			except IOError:
 				print "unable to get jpeg quality"
+	def set_crop(self, widget, val):
+		crop = v4l2_crop()
+		crop.type = V4L2_BUF_TYPE_VIDEO_CAPTURE
+		crop.c.left = val[0]
+		crop.c.top = val[1]
+		crop.c.width = val[2]
+		crop.c.height = val[3]
+		try: ioctl(self.vd, VIDIOC_S_CROP, crop)
+		except IOError:
+			print "unable to set crop"
 		
 	def message_box(self, msg):
 		msg = gtk.MessageDialog(self.window,
@@ -1061,7 +1070,6 @@ class Demo:
 				except: pass
 
 				dprint("current format is 0x%08x" % format.fmt.pix.pixelformat)
-				dprint("current format is 0x%08x", format.fmt.pix.pixelformat)
 				self.outfmt = format.fmt.pix.pixelformat
 				self.width = format.fmt.pix.width
 				self.height = format.fmt.pix.height
@@ -1233,7 +1241,6 @@ class Demo:
 					notebook.append_page(cbox, gtk.Label(queryctrl.name))
 					cbox.show()
 					cbox.set_spacing(-15)
-					dprint("enumerated class:", queryctrl.name, queryctrl.type)
 					
 
 					#hbox = gtk.HBox(False, 10)
@@ -1351,6 +1358,18 @@ class Demo:
 					label = gtk.Label(default_value)
 					hbox.pack_start(label, False, False, 10)
 					label.show()
+					if queryctrl.flags & V4L2_CTRL_FLAG_VOLATILE:
+						space = gtk.Label("")
+						hbox.pack_start(space, True, True, 10)
+						space.show()
+#						chk.set_sensitive(False)
+						button2 = gtk.Button("Refresh")
+						button2.connect("clicked",
+							lambda button, label, cid:
+								label.set_text("%d" % self.get_ctrl(cid)),
+							label, queryctrl.id)
+						hbox.pack_start(button2, False, False, 10)
+						button2.show()
 
 				elif queryctrl.type == V4L2_CTRL_TYPE_STRING:
 					entry = gtk.Entry(queryctrl.maximum)
@@ -1464,7 +1483,49 @@ class Demo:
 
 				vbox.pack_start(hbox, False, False, 0)
 				hbox.show()
+			try:
+				cropcap = v4l2_cropcap()
+				ioctl(self.vd, VIDIOC_CROPCAP, cropcap)
+				dprint("cropcap supported")
+				crop = v4l2_crop()
+				crop.type = V4L2_BUF_TYPE_VIDEO_CAPTURE
+				ioctl(self.vd, VIDIOC_G_CROP, crop)
+				dprint("g_crop: ", crop.c.left, crop.c.top, crop.c.width, crop.c.height)
 				
+				hbox = gtk.HBox(False, 10)
+				label = gtk.Label("Crop:")
+				hbox.pack_start(label, False, False, 0)
+				label.show()
+				
+				opt = gtk.OptionMenu()
+				menu = gtk.Menu()
+				menudefault = 1
+				menu.append(make_menu_item("720x480", self.set_crop, [0,0,720,480]))
+				menu.append(make_menu_item("704x480", self.set_crop, [8,0,704,480]))
+				menu.append(make_menu_item("720x576", self.set_crop, [0,0,720,576]))
+				menu.append(make_menu_item("704x576", self.set_crop, [8,0,704,576]))
+				menu.append(make_menu_item("640x400", self.set_crop, [40,40,640,400]))
+				menu.append(make_menu_item("540x360", self.set_crop, [90,60,540,360]))
+				menu.append(make_menu_item("528x422", self.set_crop, [97,77,528,422]))
+				menu.append(make_menu_item("464x368", self.set_crop, [88,66,464,368]))
+				menu.append(make_menu_item("360x240", self.set_crop, [180,120,360,240]))
+				menu.append(make_menu_item("256x192", self.set_crop, [232,144,256,192]))
+				menu.append(make_menu_item("224x168", self.set_crop, [248,156,224,168]))
+				menu.append(make_menu_item("208x156", self.set_crop, [256,162,208,156]))
+				menu.append(make_menu_item("172x132", self.set_crop, [274,174,172,132]))
+				menu.append(make_menu_item("160x120", self.set_crop, [280,180,160,120]))
+
+				opt.set_menu(menu)
+				hbox.pack_start(opt, False, False, 0)
+				opt.set_history(menudefault)
+				opt.show()
+
+				vbox.pack_start(hbox, False, False, 0)
+				hbox.show()
+			
+			except: pass
+			
+			
 			# audio
 			if cp.capabilities & V4L2_CAP_VIDEO_CAPTURE:
 				audio = v4l2_audio()
