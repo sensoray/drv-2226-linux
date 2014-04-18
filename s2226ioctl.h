@@ -117,8 +117,6 @@
 /* clip detect */
 #define S2226_CID_AUDMTR_CLIP_L (S2226_CID_AUDMTR_BASE + 10)
 #define S2226_CID_AUDMTR_CLIP_R (S2226_CID_AUDMTR_BASE + 11)
-
-
 /* audio meter test settings 
  * 0- disabled/normal mode (no TEST)
  * 1- force to zero
@@ -127,6 +125,13 @@
  */
 #define S2226_CID_AUDMTR_TEST (S2226_CID_AUDMTR_BASE + 12)
 
+
+/* extra codec specific information not defined in Linux V4L2 v4l2-controls.h */
+#define S2226_CTRL_CLASS_CODEC_EXTRA 0x00bf0000
+#define S2226_CID_CODEC_BASE (S2226_CTRL_CLASS_CODEC_EXTRA | 0x900)
+#define S2226_CID_CODEC_CLASS (S2226_CTRL_CLASS_CODEC_EXTRA | 1)
+
+#define S2226_CID_CODEC_PROGRAM_NUM (S2226_CID_CODEC_BASE + 1)
 
 typedef struct {
         int idx;
