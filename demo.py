@@ -18,7 +18,7 @@ V4L2_PIX_FMT_MP42 = 0x3234504D
 V4L2_PIX_FMT_MP2V = 0x5632504D
 V4L2_MPEG_VIDEO_ENCODING_MPEG_4 = 3
 
-debug = True
+debug = False
 for arg in sys.argv:
 	if arg == "-d":
 		debug = True
