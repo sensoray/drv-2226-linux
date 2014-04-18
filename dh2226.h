@@ -19,7 +19,7 @@
 // USB FW 0x20-0x2f is RevA board with usb serial port
 // USB FW 0x30+ is RevB board with USB serial port
 
-#define S2226_ARM_FW_VERSION (0x00000225)//(big endian always)
+#define S2226_ARM_FW_VERSION (0x00000228)//(big endian always)
 #define S2226_USB_FW_VER 0x30
 
 #ifndef __ASSEMBLY__
@@ -209,13 +209,18 @@
 	|| (_x_ == INPUT_H51_HD_1080I_60) || (_x_ == INPUT_H51_HD_1080I_5994) || (_x_ == INPUT_H51_HD_1080I_50)	\
 				|| (_x_ == INPUT_H51_SD_480I) || (_x_ == INPUT_H51_SD_576I))
 
-
 // progressive input
-#define IS_PROG_INPUT(_x_) ( (_x_ == INPUT_H51_HD_720P_60)  || (_x_ == INPUT_H51_HD_720P_5994)  || (_x_ == INPUT_H51_HD_720P_50 )\
-                        || (_x_ == INPUT_SDI_720P_60)     || (_x_ == INPUT_SDI_720P_5994)     || (_x_ == INPUT_SDI_720P_50    )\
-				|| (_x_ == INPUT_SDI_720P_60_CB)  || (_x_ == INPUT_SDI_720P_5994_CB)  || (_x_ == INPUT_SDI_720P_50_CB ))
-
-
+#define IS_PROG_INPUT(_x_) ((_x_ == INPUT_H51_HD_720P_60)       || (_x_ == INPUT_H51_HD_720P_5994) || (_x_ == INPUT_H51_HD_720P_50 ) \
+			    || (_x_ == INPUT_SDI_720P_60)       || (_x_ == INPUT_SDI_720P_5994)    || (_x_ == INPUT_SDI_720P_50    ) \
+			    || (_x_ == INPUT_SDI_720P_60_CB)    || (_x_ == INPUT_SDI_720P_5994_CB) || (_x_ == INPUT_SDI_720P_50_CB ) \
+			    || (_x_ == INPUT_SDI_720P_24)       || (_x_ == INPUT_SDI_720P_2398)    || (_x_ == INPUT_SDI_1080P_24    ) \
+			    || (_x_ == INPUT_SDI_1080P_2398)    || (_x_ == INPUT_SDI_1080P_30)     || (_x_ == INPUT_SDI_1080P_2997  ) \
+			    || (_x_ == INPUT_SDI_720P_24_CB)    || (_x_ == INPUT_SDI_720P_2398_CB) || (_x_ == INPUT_SDI_1080P_24_CB    ) \
+			    || (_x_ == INPUT_SDI_1080P_2398_CB) || (_x_ == INPUT_SDI_1080P_30_CB)  || (_x_ == INPUT_SDI_1080P_2997_CB  ) \
+			    || (_x_ == INPUT_H51_HD_720P_24)    || (_x_ == INPUT_H51_HD_720P_2398) || (_x_ == INPUT_H51_HD_1080P_24 ) \
+			    || (_x_ == INPUT_H51_HD_1080P_2398)		\
+			    )
+			    
 
 
 #define IS_HD_INPUT(_x_) ( (_x_ == INPUT_H51_HD_720P_60)  || (_x_ == INPUT_H51_HD_720P_5994)  || (_x_ == INPUT_H51_HD_720P_50 )\
@@ -233,13 +238,15 @@
                         || (_x_ == INPUT_SDI_1080P_24      ) || (_x_ == INPUT_SDI_1080P_2398    )\
                         || (_x_ == INPUT_SDI_720P_24       ) || (_x_ == INPUT_SDI_720P_2398     ))
 
+#ifdef BUILD_ARM
+
 inline int is_hd_input(int input)
 {
   if (IS_HD_INPUT(input))
     return 1;
   return 0;
 }
-
+#endif
 
 #define IS_PAL_INPUT(_x_) ((_x_ == INPUT_H51_HD_720P_50)  || (_x_ == INPUT_H51_HD_1080I_50)  || (_x_ == INPUT_SDI_1080I_50 )\
                         || (_x_ == INPUT_SDI_720P_50) || (_x_ == INPUT_SDI_1080I_50_CB) || (_x_ == INPUT_SDI_720P_50_CB) \

@@ -13,16 +13,11 @@ typedef short __int16;
 
 //Structure defines data size in bytes for each of
 //the four H51's register banks that require loading
-typedef struct {
-    __int32         sizeAPRM;
-    __int32         sizeIPRM;
-    __int32         sizeIPRV;
-    __int32         sizeIPRA;
-} H51_RB_SIZE;
 
+#include <linux/module.h>
 #include "h51set.h"
+#include "s2226mod.h"
 
-		 
 // fill in the sizes of the register banks
 // and load the register data immediately after it in memory
 void loadH51rb(H51_RB_SIZE *rb_size)
@@ -86,7 +81,7 @@ void frameRate (__int16 vFormat, int *num, int *denom)
 //based on MB86H51_setting_parameter_r4.xls.
 //Audio sampling frequency is assumed to be 48kHz
 //(the only one supported by the H51).
-unsigned int muxRate (H51_MODE *mode)
+unsigned int muxRate(struct MODE2226 *mode)
 {
 
     unsigned int         v0, v1, v2, v3;
@@ -127,7 +122,7 @@ unsigned int muxRate (H51_MODE *mode)
 //Modifies the values of H51's register banks according to mode settings.
 //Assumes the arrays are global.
 //Returns non-zero if error.
-int setH51regs (H51_MODE *mode)
+int setH51regs (struct MODE2226 *mode)
 {
     int         mr;
     __int16     tmp;
@@ -146,10 +141,10 @@ int setH51regs (H51_MODE *mode)
             h51APRM[IND_ES_INFO_0E][1] = 0x3f28;
             h51IPRV[IND_V_FORMAT][1] = 0x1000;
             if (mode->frRed) {
-		h51IPRV[IND_GOP_CLK][1] = 0xc000;
+                h51IPRV[IND_GOP_CLK][1] = 0xc000;
 	    } else {
-		h51IPRV[IND_GOP_CLK][1] = 0xc001;
-	    }
+                h51IPRV[IND_GOP_CLK][1] = 0xc001;
+            }
             h51IPRV[IND_GOP_STRM][1] = 0x0302;
             h51IPRV[IND_V_V420_FILTER_00][1] = 0x0026;
             h51IPRV[IND_V_V420_FILTER_00 + 1][1] = 0x007d;
@@ -279,10 +274,23 @@ int setH51regs (H51_MODE *mode)
         default:
             return 2;
     }
-
     h51IPRA[IND_A_BITRATE][1] = mode->aBitrate;        //for now set to 192 kbps
-
     h51IPRM[IND_MUX_RATE][1] = mr;
+    /* PIDs */
+    h51IPRM[IND_V_PID][1] = mode->v_pid;
+    h51APRM[IND_ES_V_PID_H][1] &= 0xff00;
+    h51APRM[IND_ES_V_PID_H][1] |= (7 << 5) | ((mode->v_pid >> 8) & 0x1f);
+    h51APRM[IND_ES_V_PID_L][1] &= 0x00ff;
+    h51APRM[IND_ES_V_PID_L][1] |= (mode->v_pid & 0xff) << 8;
+    h51IPRM[IND_A_PID][1] = mode->a_pid;
+    h51APRM[IND_ES_A_PID][1] = (7 << 13) | (mode->a_pid & 0x1fff);
+
+    h51IPRM[IND_PMT_PID][1] = mode->pmt_pid;
+    h51IPRM[IND_PCR_PID][1] = mode->pcr_pid;
+    h51IPRM[IND_SIT_PID][1] = mode->sit_pid;
+    h51IPRM[IND_A_SID][1] = mode->a_sid;
+    h51IPRM[IND_V_SID][1] = mode->v_sid;
+    h51IPRM[IND_PROGRAM_NUM][1] = mode->program_num;
 
     h51IPRV[IND_V_RATE_MODE][1] = 0x0030 | (mode->vbr ? 1 : 0);
 
