@@ -529,7 +529,7 @@ static int s2226_new_v4l_input_decode(struct s2226_dev *dev, int inp);
 static int write_control_endpoint(struct s2226_dev *dev, int timeout);
 static int read_interrupt_endpoint(struct s2226_dev *dev, int timeout);
 static int s2226_get_attr(struct s2226_dev *dev, int attr, int *value);
-extern int setH51regs(struct MODE2226 *mode);
+//extern int setH51regs(struct MODE2226 *mode);
 #if LINUX_VERSION_CODE >= KERNEL_VERSION_USBCOMPLETE_CHANGED
 static void s2226_read_vid_callback(struct urb *u);
 #else
@@ -3567,6 +3567,22 @@ static int s2226_probe(struct usb_interface *interface,
 	dev->h51_mode.vbr = 0;
 	dev->h51_mode.vBitrate = S2226_DEF_VBITRATE;
 	dev->h51_mode.aBitrate = S2226_DEF_ABITRATE;
+#define DEF_MPEG_STREAM_V_PID 0x1011
+#define DEF_MPEG_STREAM_A_PID 0x1100
+#define DEF_MPEG_STREAM_V_SID 0xe0
+#define DEF_MPEG_STREAM_A_SID 0xc0
+#define DEF_MPEG_STREAM_PCR_PID 0x1001
+#define DEF_MPEG_STREAM_PMT_PID 0x0100
+#define DEF_MPEG_STREAM_SIT_PID 0x001f
+
+	dev->h51_mode.v_pid = DEF_MPEG_STREAM_V_PID;
+	dev->h51_mode.a_pid = DEF_MPEG_STREAM_A_PID;
+	dev->h51_mode.pcr_pid = DEF_MPEG_STREAM_PCR_PID;
+	dev->h51_mode.pmt_pid = DEF_MPEG_STREAM_PMT_PID;
+	dev->h51_mode.sit_pid = DEF_MPEG_STREAM_SIT_PID;
+	dev->h51_mode.v_sid = DEF_MPEG_STREAM_V_SID;
+	dev->h51_mode.a_sid = DEF_MPEG_STREAM_A_SID;
+	dev->h51_mode.program_num = 1;
 	dev->h51_mode.aMode = AMODE_MP1L2;
 	dev->closed_gop = 0;
 	dev->dpb_size = -1;
@@ -5830,8 +5846,11 @@ static int vidioc_queryctrl(struct file *file, void *priv,
 	/* must be in increasing order */
 	static const u32 mpeg_ctrls[] = {
 		V4L2_CID_MPEG_CLASS,
-
 		V4L2_CID_MPEG_STREAM_TYPE,
+		V4L2_CID_MPEG_STREAM_PID_PMT,
+		V4L2_CID_MPEG_STREAM_PID_AUDIO,
+		V4L2_CID_MPEG_STREAM_PID_VIDEO,
+		V4L2_CID_MPEG_STREAM_PID_PCR,
 		V4L2_CID_MPEG_AUDIO_SAMPLING_FREQ,
 		V4L2_CID_MPEG_AUDIO_ENCODING,
 		V4L2_CID_MPEG_AUDIO_L2_BITRATE,
@@ -5841,7 +5860,13 @@ static int vidioc_queryctrl(struct file *file, void *priv,
 		0
 	};
 
+	static const u32 extra_mpeg_ctrls[] = {
+		S2226_CID_CODEC_CLASS,
+		S2226_CID_CODEC_PROGRAM_NUM,
+	};
+
 	static const u32 *ctrl_classes[] = {
+		NULL,
 		NULL,
 		NULL,
 		NULL,
@@ -5868,6 +5893,7 @@ static int vidioc_queryctrl(struct file *file, void *priv,
 		ctrl_classes[2] = altboard ? audioin_ctrls_full : audioin_ctrls;
 		ctrl_classes[3] = audioout_ctrls;
 		ctrl_classes[4] = audiometer_ctrls;
+		ctrl_classes[5] = extra_mpeg_ctrls;
 		break;
 	case S2226_STREAM_PREVIEW:
 		ctrl_classes[1] = altboard ? audioin_ctrls_full : audioin_ctrls;
@@ -5885,6 +5911,10 @@ static int vidioc_queryctrl(struct file *file, void *priv,
 	case V4L2_CID_USER_CLASS:
 	case V4L2_CID_MPEG_CLASS:
 		v4l2_ctrl_query_fill(ctrl, 0, 0, 0, 0);
+		break;
+	case S2226_CID_CODEC_CLASS:
+		strlcpy(ctrl->name, "Extra Codec", sizeof(ctrl->name));
+		ctrl->type = V4L2_CTRL_TYPE_CTRL_CLASS;
 		break;
 	case S2226_CID_AUDMTR_CLASS:
 		strlcpy(ctrl->name, "Audio Meter", sizeof(ctrl->name));
@@ -6039,6 +6069,22 @@ static int vidioc_queryctrl(struct file *file, void *priv,
 				     V4L2_MPEG_STREAM_TYPE_MPEG2_TS, 1,
 				     V4L2_MPEG_STREAM_TYPE_MPEG2_TS);
 		break;
+	case V4L2_CID_MPEG_STREAM_PID_PMT:
+		v4l2_ctrl_query_fill(ctrl, 20, 0x1ffe, 1, DEF_MPEG_STREAM_PMT_PID);
+		break;
+	case V4L2_CID_MPEG_STREAM_PID_AUDIO:
+		v4l2_ctrl_query_fill(ctrl, 20, 0x1ffe, 1, DEF_MPEG_STREAM_A_PID);
+		break;
+	case V4L2_CID_MPEG_STREAM_PID_VIDEO:
+		v4l2_ctrl_query_fill(ctrl, 20, 0x1ffe, 1, DEF_MPEG_STREAM_V_PID);
+		break;
+	case V4L2_CID_MPEG_STREAM_PID_PCR:
+		v4l2_ctrl_query_fill(ctrl, 20, 0x1ffe, 1, DEF_MPEG_STREAM_PCR_PID);
+		break;
+	case S2226_CID_CODEC_PROGRAM_NUM:
+		ctrl_fill(ctrl, V4L2_CTRL_TYPE_INTEGER, "Program Number", 1, 0xffff, 1, 0, 0);
+		break;
+
 	case V4L2_CID_MPEG_AUDIO_SAMPLING_FREQ:
 		v4l2_ctrl_query_fill(ctrl,
 				     V4L2_MPEG_AUDIO_SAMPLING_FREQ_48000,
@@ -6219,6 +6265,12 @@ static int vidioc_try_ext_ctrls(struct file *file, void *priv,
 			else if (ctrl->value > 0x40)
 				ctrl->value = 0x40;
 			break;
+		case S2226_CID_CODEC_PROGRAM_NUM:
+			if (ctrl->value < 1)
+				ctrl->value = 1;
+			else if (ctrl->value > 0xffff)
+				ctrl->value = 0xffff;
+			break;
 		case S2226_CID_AUDIN_BAL_R:
 		case S2226_CID_AUDIN_BAL_L:
 		case S2226_CID_AUDIN_AGC_ON_R:
@@ -6298,6 +6350,15 @@ static int vidioc_try_ext_ctrls(struct file *file, void *priv,
 		case V4L2_CID_MPEG_STREAM_TYPE:
 			ctrl->value = V4L2_MPEG_STREAM_TYPE_MPEG2_TS;
 			break;
+		case V4L2_CID_MPEG_STREAM_PID_PMT:
+		case V4L2_CID_MPEG_STREAM_PID_AUDIO:
+		case V4L2_CID_MPEG_STREAM_PID_VIDEO:
+		case V4L2_CID_MPEG_STREAM_PID_PCR:
+			if (ctrl->value > 0x1ffe)
+				ctrl->value = 0x1ffe;
+			else if (ctrl->value < 20)
+				ctrl->value = 20;
+			break;
 		case V4L2_CID_MPEG_AUDIO_ENCODING:
 			ctrl->value = V4L2_MPEG_AUDIO_ENCODING_LAYER_2;
 			break;
@@ -6347,6 +6408,21 @@ static int vidioc_g_ext_ctrls(struct file *file, void *priv,
 		switch (ctrl->id) {
 		case V4L2_CID_MPEG_STREAM_TYPE:
 			ctrl->value = V4L2_MPEG_STREAM_TYPE_MPEG2_TS;
+			break;
+		case V4L2_CID_MPEG_STREAM_PID_PMT:
+			ctrl->value = dev->h51_mode.pmt_pid;
+			break;
+		case V4L2_CID_MPEG_STREAM_PID_AUDIO:
+			ctrl->value = dev->h51_mode.a_pid;
+			break;
+		case V4L2_CID_MPEG_STREAM_PID_VIDEO:
+			ctrl->value = dev->h51_mode.v_pid;
+			break;
+		case V4L2_CID_MPEG_STREAM_PID_PCR:
+			ctrl->value = dev->h51_mode.pcr_pid;
+			break;
+		case S2226_CID_CODEC_PROGRAM_NUM:
+			ctrl->value = dev->h51_mode.program_num;
 			break;
 		case V4L2_CID_MPEG_VIDEO_ENCODING:
 			ctrl->value = V4L2_MPEG_VIDEO_ENCODING_MPEG_4_AVC;
@@ -6636,6 +6712,21 @@ static int vidioc_s_ext_ctrls(struct file *file, void *priv,
 			SetAudioRoute(dev, ctrl->value);
 			break;
 		case V4L2_CID_MPEG_STREAM_TYPE:
+			break;
+		case V4L2_CID_MPEG_STREAM_PID_PMT:
+			dev->h51_mode.pmt_pid = ctrl->value;
+			break;
+		case V4L2_CID_MPEG_STREAM_PID_AUDIO:
+			dev->h51_mode.a_pid = ctrl->value;
+			break;
+		case V4L2_CID_MPEG_STREAM_PID_VIDEO:
+			dev->h51_mode.v_pid = ctrl->value;
+			break;
+		case V4L2_CID_MPEG_STREAM_PID_PCR:
+			dev->h51_mode.pcr_pid = ctrl->value;
+			break;
+		case S2226_CID_CODEC_PROGRAM_NUM:
+			dev->h51_mode.program_num = ctrl->value;
 			break;
 		case V4L2_CID_MPEG_VIDEO_ENCODING:
 			break;

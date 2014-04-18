@@ -23,12 +23,23 @@ struct MODE2226 {
 	int         aStereo;        //audio stereo/mono selection: !=0 if stereo
 	int         aBitrate;       //audio bitrate in kbit/s (CURRENTLY UNSUPPORTED)
 	int         gop;            //GOP structure (CURRENTLY UNSUPPORTED)
+	int v_pid;
+	int a_pid;
+	int pcr_pid;
+	int pmt_pid;
+	int sit_pid;
+	int v_sid;
+	int a_sid;
+	int program_num;
 };
+
+int setH51regs (struct MODE2226 *mode);
+
 
 // the number of registers in each register group
 #define h51APRMregs 34
 #define h51IPRMregs 23
-#define h51IPRVregs 24
+#define h51IPRVregs 28
 #define h51IPRAregs 14
 extern unsigned int h51APRM[h51APRMregs][2];
 extern unsigned int h51IPRM[h51IPRMregs][2];
