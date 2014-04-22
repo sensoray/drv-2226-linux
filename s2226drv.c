@@ -6205,7 +6205,7 @@ static int vidioc_g_ext_ctrls(struct file *file, void *priv,
 			rc = s2226_get_audiomtr_holdclip(dev, &reg, NULL, NULL, NULL);
 			if (rc != 0)
 				return rc;
-			ctrl->value = reg;
+			ctrl->value = -reg;
 		}
 		break;
 		case S2226_CID_AUDMTR_HOLD_R:
@@ -6213,7 +6213,7 @@ static int vidioc_g_ext_ctrls(struct file *file, void *priv,
 			rc = s2226_get_audiomtr_holdclip(dev, NULL, &reg, NULL, NULL);
 			if (rc != 0)
 				return rc;
-			ctrl->value = reg;
+			ctrl->value = -reg;
 		}
 		break;
 		case S2226_CID_AUDMTR_CLIP_L:
