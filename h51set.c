@@ -6,7 +6,7 @@
 /////////////////////////////////////////////////
 
 
-#define ARRAY_SIZE(arr) (sizeof(arr) / sizeof((arr)[0]))
+//#define ARRAY_SIZE(arr) (sizeof(arr) / sizeof((arr)[0]))
 
 typedef int __int32;
 typedef short __int16;

@@ -96,10 +96,9 @@
 #define S2226_BULKMSG_TO  5000
 #define S2226_PRIMEFX2_TO 500
 #define S2226_CTRLMSG_TO  500
-
 #define S2226_DEF_VBITRATE 2000
 #define S2226_MIN_VBITRATE 1000
-#define S2226_MAX_VBITRATE 19000
+#define S2226_MAX_VBITRATE 20000
 #define S2226_DEF_ABITRATE 256
 #define S2226_CONTEXT_USBDEV 0  /* for /dev/s2226vX */
 #define S2226_CONTEXT_V4L    1  /* for /dev/videoX */
@@ -529,7 +528,6 @@ static int s2226_new_v4l_input_decode(struct s2226_dev *dev, int inp);
 static int write_control_endpoint(struct s2226_dev *dev, int timeout);
 static int read_interrupt_endpoint(struct s2226_dev *dev, int timeout);
 static int s2226_get_attr(struct s2226_dev *dev, int attr, int *value);
-//extern int setH51regs(struct MODE2226 *mode);
 #if LINUX_VERSION_CODE >= KERNEL_VERSION_USBCOMPLETE_CHANGED
 static void s2226_read_vid_callback(struct urb *u);
 #else
@@ -1945,7 +1943,8 @@ static int s2226_set_attr(struct s2226_dev *dev, int attr, int value)
 	rc = s2226_send_msg(dev, timeout);
 
 	if (rc < 0) {
-		dev_info(&dev->udev->dev, "%s fail %d\n", __func__, rc);
+		dev_info(&dev->udev->dev, "%s [%d:%x] fail %d\n", __func__, 
+                 attr, value, rc);
 		s2226_mutex_unlock(&dev->cmdlock);
 		return rc;
 	}
@@ -2692,6 +2691,7 @@ long s2226_ioctl(struct file *file,
 	case S2226_VIDIOC_STARTDECODE:
 	{
 		start_param_t cmd;
+
 		dprintk(1, "start decode\n");
 		if (strm->type != S2226_STREAM_DECODE) {
 			printk(KERN_INFO "S2226_VIDIOC_STARTDECODE invalid handle\n");
@@ -3598,7 +3598,7 @@ static int s2226_probe(struct usb_interface *interface,
 	dev->cur_audio_sdiout = AMUX_SDI_OUT_MPEG_OUT;
 	s2226_probe_v4l(dev);
 	s2226_get_fpga_ver(dev);
-	s2226_set_interface(dev, 0, 1, 1);
+	s2226_set_interface(dev, 0, 0, 1);
 	dev_info(&dev->udev->dev, "s2226: probe success\n");
 	return 0;
 errorUR:
@@ -5013,7 +5013,6 @@ static int vidioc_try_fmt_vid_cap(struct file *file, void *priv,
 			h = maxh;
 		if (w >= maxw)
 			w = maxw;
-        //printk("field is %d\n", f->fmt.pix.field);
 		if (f->fmt.pix.field == V4L2_FIELD_ANY) {
 			if (IS_PROG_INPUT(dev->cur_input))
 				f->fmt.pix.field = V4L2_FIELD_TOP;
@@ -5114,7 +5113,7 @@ static int vidioc_s_fmt_vid_cap(struct file *file, void *priv,
 	strm->width = f->fmt.pix.width;
 	strm->height = f->fmt.pix.height;
 	strm->fourcc = f->fmt.pix.pixelformat;
-	strm->field = f->fmt.pix.field;
+    strm->field = f->fmt.pix.field;
 
 	s2226_set_attr(dev, ATTR_SCALE_X, f->fmt.pix.width);
 
@@ -6620,7 +6619,7 @@ static int vidioc_g_ext_ctrls(struct file *file, void *priv,
 			rc = s2226_get_audiomtr_holdclip(dev, &reg, NULL, NULL, NULL);
 			if (rc != 0)
 				return rc;
-			ctrl->value = reg;
+			ctrl->value = -reg;
 		}
 		break;
 		case S2226_CID_AUDMTR_HOLD_R:
@@ -6628,7 +6627,7 @@ static int vidioc_g_ext_ctrls(struct file *file, void *priv,
 			rc = s2226_get_audiomtr_holdclip(dev, NULL, &reg, NULL, NULL);
 			if (rc != 0)
 				return rc;
-			ctrl->value = reg;
+			ctrl->value = -reg;
 		}
 		break;
 		case S2226_CID_AUDMTR_CLIP_L:
