@@ -28,7 +28,7 @@ static FILE *fFW = NULL;
 static int quit = 0;
 static int G_arm, G_fpga;
 static int fd;
-static char *dev_name = NULL;
+static char dev_name[100];
 
 #define FNAME_ARM "f2226_228h.bin"
 #define FNAME_FPGA "s2226_Ver.0.5.9.bin"
@@ -181,25 +181,47 @@ static int xioctl(int fd, int request, void *arg)
 static void open_device(void)
 {
 	struct stat st;
+    struct v4l2_capability cap;
+    int i;
+    int fails =0 ;
+    for (i = 0; i < 20; i++) {
+        sprintf(dev_name, "/dev/video%d", i);
+        printf("opening dev %s\n", dev_name);
+        if (-1 == stat (dev_name, &st)) {
+            fails++;
+            if (fails < 4)
+                continue;
+            else {
+                fprintf(stderr, "could not find device\n");
+                exit(EXIT_FAILURE);
+            }
+        }
+        fails = 0;
+        if (!S_ISCHR (st.st_mode)) {
+            fprintf (stderr, "%s is no device\n", dev_name);
+            exit (EXIT_FAILURE);
+        }
+        fd = open(dev_name, O_RDWR /* required */ | O_NONBLOCK, 0);
+    	if (-1 == fd) {
+            fprintf (stderr, "Cannot open '%s': %d, %s\n",
+                     dev_name, errno, strerror (errno));
+            exit (EXIT_FAILURE);
+        }
+        if (-1 == xioctl (fd, VIDIOC_QUERYCAP, &cap)) {
+            fprintf (stderr, "Cannot query name '%s': %d, %s\n",
+                     dev_name, errno, strerror (errno));
+            exit (EXIT_FAILURE);
+        }
+        printf("devname %s\n", cap.card);
+        if (strncmp(cap.card, "Sensoray Model 2226", 19)) {
+            fprintf (stderr, "not a 2226 device, searching other /dev/video devices\n");
+            close(fd);
+            fd = -1;
+            continue;
+        } else
+            break;
+    }
 
-	if (-1 == stat (dev_name, &st)) {
-		fprintf (stderr, "Cannot identify '%s': %d, %s\n",
-			dev_name, errno, strerror (errno));
-		exit (EXIT_FAILURE);
-	}
-
-	if (!S_ISCHR (st.st_mode)) {
-		fprintf (stderr, "%s is no device\n", dev_name);
-		exit (EXIT_FAILURE);
-	}
-
-	fd = open(dev_name, O_RDWR /* required */ | O_NONBLOCK, 0);
-
-	if (-1 == fd) {
-		fprintf (stderr, "Cannot open '%s': %d, %s\n",
-			dev_name, errno, strerror (errno));
-		exit (EXIT_FAILURE);
-	}
     printf("opened\n");
 	return;
 }
@@ -271,7 +293,7 @@ int main(int argc, char **argv)
         return -1;
     }
     printf("Sensoray 2226 firmware updater March 19, 2014 (for RevA, RevB and Rev C boards)\n");
-    dev_name = "/dev/video0";
+
     open_device();
     init_device();
 
@@ -291,7 +313,9 @@ int main(int argc, char **argv)
         G_fpga = param.val & 0x7ff;
 
         if (G_fpga == 0x7ff) {
-            (void) ioctl(fd, S2226_VIDIOC_SET_INPUT, 0);
+            struct v4l2_input inp;
+            inp.index = 4;
+            (void) ioctl(fd, VIDIOC_S_INPUT, &inp);
             rc = ioctl(fd, S2226_VIDIOC_FPGA_RD, &param);
             if (rc != 0) {
                 printf("error reading version\n");
@@ -312,7 +336,7 @@ int main(int argc, char **argv)
             printf("RevA board detected\n");
         }
     } else {
-        printf("VERSION: error reading\n", param.addr);
+        printf("VERSION: error reading %x\n", param.addr);
         return 0;
     }
 
