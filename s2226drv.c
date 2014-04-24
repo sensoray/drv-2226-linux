@@ -3480,7 +3480,7 @@ static int s2226_probe(struct usb_interface *interface,
 	dev->cur_audio_sdiout = AMUX_SDI_OUT_MPEG_OUT;
 	s2226_probe_v4l(dev);
 	s2226_get_fpga_ver(dev);
-	s2226_set_interface(dev, 0, 1, 1);
+	s2226_set_interface(dev, 0, 0, 1);
 	dev_info(&dev->udev->dev, "s2226: probe success\n");
 	return 0;
 errorUR:
