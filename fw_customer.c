@@ -336,7 +336,7 @@ int main(int argc, char **argv)
             printf("RevA board detected\n");
         }
     } else {
-        printf("VERSION: error reading\n", param.addr);
+        printf("VERSION: error reading %x\n", param.addr);
         return 0;
     }
 

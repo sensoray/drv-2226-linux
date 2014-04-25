@@ -27,11 +27,11 @@
 #define S2226_CID_AUDIN_BASE (S2226_CTRL_CLASS_AUDIN | 0x900)
 #define S2226_CID_AUDIN_CLASS (S2226_CTRL_CLASS_AUDIN | 1)
 
-#define S2226_CID_AUDIN_AGC_ON_R (S2226_CID_AUDIN_BASE + 1) /*right*/
-#define S2226_CID_AUDIN_AGC_ON_L (S2226_CID_AUDIN_BASE + 2) /*left*/
+#define S2226_CID_AUDIN_AGC_ON_L (S2226_CID_AUDIN_BASE + 1) /*right*/
+#define S2226_CID_AUDIN_AGC_ON_R (S2226_CID_AUDIN_BASE + 2) /*left*/
 /* AGC gain (this is different from non-AGC gain) */
-#define S2226_CID_AUDIN_AGC_GAIN_R (S2226_CID_AUDIN_BASE + 3) /*right*/
-#define S2226_CID_AUDIN_AGC_GAIN_L (S2226_CID_AUDIN_BASE + 4) /*left*/
+#define S2226_CID_AUDIN_AGC_GAIN_L (S2226_CID_AUDIN_BASE + 3) /*right*/
+#define S2226_CID_AUDIN_AGC_GAIN_R (S2226_CID_AUDIN_BASE + 4) /*left*/
 /* audio balanced(differential) settings */
 /* 0 is default.  1 for balanced audio inputs */
 

@@ -51,8 +51,8 @@ struct buffer {
 	size_t		length;
 };
 
-static char *		dev_name	= NULL;
-static io_method	io		= IO_METHOD_MMAP;
+static char *dev_name = NULL;
+static io_method io	= IO_METHOD_MMAP;
 static int		fd		= -1;
 struct buffer *		buffers		= NULL;
 static unsigned int	n_buffers	= 0;
@@ -92,10 +92,10 @@ static int G_svideo = 0;
 static int G_ainput = -1;
 static int G_agc = -1;
 static int G_ach = -1; // audio channels -1=default, 0=stereo, 3=mono
-static int G_pal = 0;
+static int G_input = -1;
 static int G_framerate = 30;
 static int G_field = V4L2_FIELD_ANY;
-static int G_frames = 250;
+static int G_frames = 2500;
 static int G_idr = -1; // h.264 IDR frames (0=first GOP only, otherwise every Nth GOP)
 static int G_gop = -1; // GOP size in frames
 static int G_profile = -1; // h.264 profile
@@ -238,11 +238,31 @@ read_frame			(void)
 {
 	struct v4l2_buffer buf;
 	unsigned int i;
-
+    int rc;
+    static int seq = 0;
 	switch (io) {
 	case IO_METHOD_READ:
+        rc = read(fd, buffers[0].start, buffers[0].length);
+        //printf("read frame %d\n", rc);
+            if (-1 ==rc) {
+            switch (errno) {
+            case EAGAIN:
+                return 0;
+                
+			case EIO:
+				/* Could ignore EIO, see spec. */
+				/* fall through */
+			default:
+				errno_exit ("read");
+			}
+		}
+        process_image (buffers[0].start,
+                       rc,
+                       seq++);
+		break;
 	case IO_METHOD_USERPTR:
 	default:
+
 		fprintf(stderr, "not supported, use mmap!\n");
 		break;
 	case IO_METHOD_MMAP:
@@ -380,6 +400,7 @@ start_capturing                 (void)
 
 		if (-1 == xioctl (fd, VIDIOC_STREAMON, &type))
 			errno_exit ("VIDIOC_STREAMON");
+        printf("streamon done\n");
         printf("mmap done\n");
 		break;
 
@@ -590,8 +611,8 @@ init_device                     (void)
 	}
 	
 	fprintf(stderr, "Card: %s\n", cap.card);
-#if 0
-	if (strncmp(cap.card, "Sensoray Model 2253", 19)) {
+#if 1
+	if (strncmp(cap.card, "Sensoray Model 2226", 19)) {
 		fprintf (stderr, "%s card is not supported\n",
 			dev_name);
 		exit (EXIT_FAILURE);
@@ -666,36 +687,14 @@ init_device                     (void)
 
 
 	/* Select video input, video standard and tune here. */
-#if 0	// not used for 2226
-	{
-		int index = G_svideo ? 1 : 0;
+	if (G_input != -1) {
+		int index = G_input;
 
 		if (-1 == ioctl (fd, VIDIOC_S_INPUT, &index)) {
 			perror ("VIDIOC_S_INPUT");
 			exit (EXIT_FAILURE);
 		}
 	}
-	
-	{	/* change default NTSC standard to PAL */
-		v4l2_std_id type = (G_pal) ? V4L2_STD_PAL : V4L2_STD_NTSC;
-
-		if (-1 == xioctl (fd, VIDIOC_S_STD, &type)) {
-			perror("VIDIOC_S_STD");
-			//fprintf(stderr, "could not set std\n");
-		}
-
-		if (-1 == xioctl (fd, VIDIOC_G_STD, &type)) {
-			perror("VIDIOC_G_STD");
-			//fprintf(stderr, "could not get std\n");
-		}
-
-		if (type == V4L2_STD_NTSC) {
-			fprintf(stderr, "Using NTSC standard\n");
-		} else if (type == V4L2_STD_PAL) {
-			fprintf(stderr, "Using PAL standard\n");
-		}
-	}
-#endif
 
 	{
 		struct v4l2_input input;
@@ -746,7 +745,7 @@ init_device                     (void)
                                 break;
                         }
                 }
-        } else {	
+        } else {
                 /* Errors ignored. */
         }
 
@@ -754,6 +753,8 @@ init_device                     (void)
         CLEAR (fmt);
         fmt.type                = V4L2_BUF_TYPE_VIDEO_CAPTURE;
 	switch (G_size) {
+#if 0
+	// TODO: this needs to be set based on current input
 	case 0:
 		fmt.fmt.pix.width = G_pal ? 704 : 640;
 		fmt.fmt.pix.height = G_pal ? 576 : 480;
@@ -762,10 +763,11 @@ init_device                     (void)
 		fmt.fmt.pix.width = G_pal ? 352 : 320;
 		fmt.fmt.pix.height = G_pal ? 288 : 240;
 		break;
+#endif
 	case 2:
 		fmt.fmt.pix.width = G_width;
 		fmt.fmt.pix.height = G_height;
-		break;		
+		break;
 	}
 	switch (type) {
 	case TYPE_JPEG:
@@ -1141,7 +1143,7 @@ usage                           (FILE *                 fp,
 		"-s | --size          Size 0=vga, 1=1/2 VGA, or NxN\n"
 		"-o | --out name      Output file name (MPEG only)\n"
 		"-b | --br bitrate    Set video bitrate(bps, 2mbit default)\n"
-		"-p | --pal           Set Standard to PAL\n"
+		"-p | --input         Set video input (see manual)\n"
 		"-i | --int n         Interpolate field mode\n"
 		"-f | --frames n      Capture n frames [default 250]\n"
 		"                     (0=unlimited, use ctrl-c to stop)\n"
@@ -1174,7 +1176,7 @@ usage                           (FILE *                 fp,
 
 
 
-static const char short_options [] = "d:hMREjJ1248mztTnxyupvo:s:a:w:b:c:q:i:f:r:g:I:G:U:N:D:OSP:L:CB5";
+static const char short_options [] = "d:hMREjJ1248mztTnxyup:vo:s:a:w:b:c:q:i:f:r:g:I:G:U:N:D:OSP:L:CB5";
 
 static const struct option
 long_options [] = {
@@ -1200,7 +1202,7 @@ long_options [] = {
 	{ "uyvy",	no_argument,		NULL,		'u' },
 	{ "bgr24",	no_argument,		NULL,		'B' },
 	{ "rgb565",	no_argument,		NULL,		'5' },
-	{ "pal",	no_argument,		NULL,		'p' },
+	{ "input",	required_argument,	NULL,		'p' },
 //        { "svideo",	no_argument,		NULL,		'v' },
 	{ "size",	required_argument,	NULL,		's' },
 	{ "caption",	required_argument,	NULL,		'c' },
@@ -1396,8 +1398,7 @@ main                            (int                    argc,
 			}
 			break;
 		case 'p':
-			G_pal = 1;
-			G_framerate = 25;
+			G_input = atoi(optarg);
 			break;
 		case 'v':
 			G_svideo = 1;
@@ -1485,6 +1486,7 @@ main                            (int                    argc,
 	atexit(cleanup);
 	
         start_capturing ();
+
 	mainloop ();
 	
 	G_aud_cap = 0;

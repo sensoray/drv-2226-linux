@@ -73,6 +73,15 @@
                                               //        When SNAPSTAT(0)=1 - Y(7..0) will be read on LSB of next SNAPDAT access.
 #define S2226_REG_SNAPSTAT      (0x064<<1)    // r    Reset image data sequencer, Returns SNAPDAT read type
 
+#define S2226_REG_VRAWSTAT      (0x070<<1)    // r    Bit-0: STREAM_FAV (Frame available when high)
+#define S2226_REG_VRAWREAD      (0x071<<1)    // r    Raw Video in 422 format (1st word Y0:Cb0, 2nd word Y1:Cr0)
+#define S2226_REG_VRAWCTL       (0x072<<1)    // w    Bit-2: 1=Reset, Bit-1,0: Format. Bit-1 swap MSB/LSB. Bit-0 swap color.
+#define S2226_REG_VRAWFSZ_LSB   (0x073<<1)    // w    Frame Size LSB (Bits-15:0)
+#define S2226_REG_VRAWFSZ_MSB   (0x074<<1)    // w    Frame Size MSB (Bits-20:16 in bits-4:0)
+
+
+
+
 // video to D1 scalar(MPEG) reset must be active when registers written
 #define S2226_REG_MPEGHORZ0     (0x80<<1)    // w    source width LSB
 #define S2226_REG_MPEGHORZ1     (0x81<<1)    // w    source width MSB
