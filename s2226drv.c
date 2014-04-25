@@ -67,7 +67,7 @@
 #define S2226_CTRLMSG_TO  500
 #define S2226_DEF_VBITRATE 2000
 #define S2226_MIN_VBITRATE 1000
-#define S2226_MAX_VBITRATE 19000
+#define S2226_MAX_VBITRATE 20000
 #define S2226_DEF_ABITRATE 256
 #define S2226_CONTEXT_USBDEV 0  /* for /dev/s2226vX */
 #define S2226_CONTEXT_V4L    1  /* for /dev/videoX */
@@ -1166,11 +1166,25 @@ static int send_saa7115_wr(struct s2226_dev *dev, unsigned char addr,
 	return rc;
 }
 
+#define S2226_REG_CONTRAST (0x044<<1)
+#define S2226_REG_BRIGHTNESS   (0x045<<1)
+#define S2226_REG_CRSAT   (0x046<<1)
+#define S2226_REG_CBSAT   (0x047<<1)
 
 static int s2226_set_brightness(struct s2226_dev *dev, unsigned char val)
 {
 	int rc;
-	rc = send_saa7115_wr(dev, 0x0a, val);
+    switch (dev->v4l_input) {
+    case S2226_INPUT_COMPOSITE_0:
+    case S2226_INPUT_COMPOSITE_1:
+    case S2226_INPUT_SVIDEO_0:
+    case S2226_INPUT_SVIDEO_1:
+        rc = send_saa7115_wr(dev, 0x0a, val);
+        break;
+    default:
+        rc = send_fpga_write(dev, S2226_REG_BRIGHTNESS, val);
+        break;
+    }
 	dev->brightness = val;
 	return rc;
 }
@@ -1178,7 +1192,23 @@ static int s2226_set_brightness(struct s2226_dev *dev, unsigned char val)
 static int s2226_set_contrast(struct s2226_dev *dev, char val)
 {
 	int rc;
-	rc = send_saa7115_wr(dev, 0x0b, (unsigned char) val);
+    int tval;
+    switch (dev->v4l_input) {
+    case S2226_INPUT_COMPOSITE_0:
+    case S2226_INPUT_COMPOSITE_1:
+    case S2226_INPUT_SVIDEO_0:
+    case S2226_INPUT_SVIDEO_1:
+        rc = send_saa7115_wr(dev, 0x0b, (unsigned char) val);
+        break;
+    default:
+        tval = val * 2;
+        if (tval > 255)
+            tval = 255;
+        if (tval < 0)
+            tval = 0;
+        rc = send_fpga_write(dev, S2226_REG_CONTRAST, tval);
+        break;
+    }
 	dev->contrast = val;
 	return rc;
 }
@@ -1186,9 +1216,27 @@ static int s2226_set_contrast(struct s2226_dev *dev, char val)
 static int s2226_set_saturation(struct s2226_dev *dev, char val)
 {
 	int rc;
-	rc = send_saa7115_wr(dev, 0x0c, (unsigned char) val);
-	dev->saturation = val;
+    int tval;
+    switch (dev->v4l_input) {
+    case S2226_INPUT_COMPOSITE_0:
+    case S2226_INPUT_COMPOSITE_1:
+    case S2226_INPUT_SVIDEO_0:
+    case S2226_INPUT_SVIDEO_1:
+        rc = send_saa7115_wr(dev, 0x0c, (unsigned char) val);
+        break;
+    default:
+        tval = val * 2;
+        if (tval > 255)
+            tval = 255;
+        if (tval < 0)
+            tval = 0;
+        rc = send_fpga_write(dev, S2226_REG_CRSAT, tval);
+        rc = send_fpga_write(dev, S2226_REG_CBSAT, tval);
+        break;
+    }
+    dev->saturation = val;
 	return rc;
+
 }
 
 static int s2226_set_hue(struct s2226_dev *dev, char val)
@@ -1854,7 +1902,8 @@ static int s2226_set_attr(struct s2226_dev *dev, int attr, int value)
 	rc = s2226_send_msg(dev, timeout);
 
 	if (rc < 0) {
-		dev_info(&dev->udev->dev, "%s fail %d\n", __func__, rc);
+		dev_info(&dev->udev->dev, "%s [%d:%x] fail %d\n", __func__, 
+                 attr, value, rc);
 		s2226_mutex_unlock(&dev->cmdlock);
 		return rc;
 	}
@@ -2185,6 +2234,13 @@ static int s2226_new_input(struct s2226_dev *dev, int input)
 		rc = s2226_set_attr(dev, ATTR_INPUT, input);
 		if (rc != 0) /* retry*/
 			rc = s2226_set_attr(dev, ATTR_INPUT, input);
+        send_fpga_write(dev, S2226_REG_BRIGHTNESS, 128);
+        send_fpga_write(dev, S2226_REG_CONTRAST, 128);
+        send_fpga_write(dev, S2226_REG_CRSAT, 128);
+        send_fpga_write(dev, S2226_REG_CBSAT, 128);
+        dev->brightness = 128;
+        dev->contrast = 64;
+        dev->saturation = 64;
 	}
 
 	if (rc != 0) {
