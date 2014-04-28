@@ -77,6 +77,9 @@
 #define KERNEL_VERSION_V4L2_NEW_FOPS2      KERNEL_VERSION(2, 6, 29)
 #define KERNEL_VERSION_V4L2DEV KERNEL_VERSION(2, 6, 30)
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(3, 2, 0)
+#define V4L2_CTRL_FLAG_VOLATILE         0x0080
+#endif
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 28)
 #define	V4L2_MPEG_VIDEO_ENCODING_MPEG_4_AVC 2
@@ -1263,17 +1266,17 @@ static int send_saa7115_wr(struct s2226_dev *dev, unsigned char addr,
 static int s2226_set_brightness(struct s2226_dev *dev, unsigned char val)
 {
 	int rc;
-    switch (dev->v4l_input) {
-    case S2226_INPUT_COMPOSITE_0:
-    case S2226_INPUT_COMPOSITE_1:
-    case S2226_INPUT_SVIDEO_0:
-    case S2226_INPUT_SVIDEO_1:
-        rc = send_saa7115_wr(dev, 0x0a, val);
-        break;
-    default:
-        rc = send_fpga_write(dev, S2226_REG_BRIGHTNESS, val);
-        break;
-    }
+	switch (dev->v4l_input) {
+	case S2226_INPUT_COMPOSITE_0:
+	case S2226_INPUT_COMPOSITE_1:
+	case S2226_INPUT_SVIDEO_0:
+	case S2226_INPUT_SVIDEO_1:
+		rc = send_saa7115_wr(dev, 0x0a, val);
+		break;
+	default:
+		rc = send_fpga_write(dev, S2226_REG_BRIGHTNESS, val);
+		break;
+	}
 	dev->brightness = val;
 	return rc;
 }
@@ -1281,23 +1284,23 @@ static int s2226_set_brightness(struct s2226_dev *dev, unsigned char val)
 static int s2226_set_contrast(struct s2226_dev *dev, char val)
 {
 	int rc;
-    int tval;
-    switch (dev->v4l_input) {
-    case S2226_INPUT_COMPOSITE_0:
-    case S2226_INPUT_COMPOSITE_1:
-    case S2226_INPUT_SVIDEO_0:
-    case S2226_INPUT_SVIDEO_1:
-        rc = send_saa7115_wr(dev, 0x0b, (unsigned char) val);
-        break;
-    default:
-        tval = val * 2;
-        if (tval > 255)
-            tval = 255;
-        if (tval < 0)
-            tval = 0;
-        rc = send_fpga_write(dev, S2226_REG_CONTRAST, tval);
-        break;
-    }
+	int tval;
+	switch (dev->v4l_input) {
+	case S2226_INPUT_COMPOSITE_0:
+	case S2226_INPUT_COMPOSITE_1:
+	case S2226_INPUT_SVIDEO_0:
+	case S2226_INPUT_SVIDEO_1:
+		rc = send_saa7115_wr(dev, 0x0b, (unsigned char) val);
+		break;
+	default:
+		tval = val * 2;
+		if (tval > 255)
+			tval = 255;
+		if (tval < 0)
+			tval = 0;
+		rc = send_fpga_write(dev, S2226_REG_CONTRAST, tval);
+		break;
+	}
 	dev->contrast = val;
 	return rc;
 }
@@ -1305,25 +1308,25 @@ static int s2226_set_contrast(struct s2226_dev *dev, char val)
 static int s2226_set_saturation(struct s2226_dev *dev, char val)
 {
 	int rc;
-    int tval;
-    switch (dev->v4l_input) {
-    case S2226_INPUT_COMPOSITE_0:
-    case S2226_INPUT_COMPOSITE_1:
-    case S2226_INPUT_SVIDEO_0:
-    case S2226_INPUT_SVIDEO_1:
-        rc = send_saa7115_wr(dev, 0x0c, (unsigned char) val);
-        break;
-    default:
-        tval = val * 2;
-        if (tval > 255)
-            tval = 255;
-        if (tval < 0)
-            tval = 0;
-        rc = send_fpga_write(dev, S2226_REG_CRSAT, tval);
-        rc = send_fpga_write(dev, S2226_REG_CBSAT, tval);
-        break;
-    }
-    dev->saturation = val;
+	int tval;
+	switch (dev->v4l_input) {
+	case S2226_INPUT_COMPOSITE_0:
+	case S2226_INPUT_COMPOSITE_1:
+	case S2226_INPUT_SVIDEO_0:
+	case S2226_INPUT_SVIDEO_1:
+		rc = send_saa7115_wr(dev, 0x0c, (unsigned char) val);
+		break;
+	default:
+		tval = val * 2;
+		if (tval > 255)
+			tval = 255;
+		if (tval < 0)
+			tval = 0;
+		rc = send_fpga_write(dev, S2226_REG_CRSAT, tval);
+		rc = send_fpga_write(dev, S2226_REG_CBSAT, tval);
+		break;
+	}
+	dev->saturation = val;
 	return rc;
 
 }
@@ -2323,13 +2326,13 @@ static int s2226_new_input(struct s2226_dev *dev, int input)
 		rc = s2226_set_attr(dev, ATTR_INPUT, input);
 		if (rc != 0) /* retry*/
 			rc = s2226_set_attr(dev, ATTR_INPUT, input);
-        send_fpga_write(dev, S2226_REG_BRIGHTNESS, 128);
-        send_fpga_write(dev, S2226_REG_CONTRAST, 128);
-        send_fpga_write(dev, S2226_REG_CRSAT, 128);
-        send_fpga_write(dev, S2226_REG_CBSAT, 128);
-        dev->brightness = 128;
-        dev->contrast = 64;
-        dev->saturation = 64;
+		send_fpga_write(dev, S2226_REG_BRIGHTNESS, 128);
+		send_fpga_write(dev, S2226_REG_CONTRAST, 128);
+		send_fpga_write(dev, S2226_REG_CRSAT, 128);
+		send_fpga_write(dev, S2226_REG_CBSAT, 128);
+		dev->brightness = 128;
+		dev->contrast = 64;
+		dev->saturation = 64;
 	}
 
 	if (rc != 0) {
@@ -3305,14 +3308,13 @@ static void s2226_read_preview_callback(struct urb *u, struct pt_regs *ptregs)
 {
 	struct s2226_urb *urb;
 	struct s2226_dev *dev;
-	int urb_context;
+
 	urb = (struct s2226_urb *)u->context;
 	if (!urb->strm->active) {
 		dprintk(1, "got urb, not active\n");
 		return;
 	}
 	dev = urb->dev;
-	urb_context = urb->context;
 	urb->ready = 1;
 	dprintk(4, "s2226_read_vid_callback %d\n", u->actual_length);
 	s2226_got_preview_data(urb->strm, u->transfer_buffer, u->actual_length);
@@ -4633,16 +4635,16 @@ static int s2226_got_preview_data(struct s2226_stream *strm, unsigned char *tbuf
 	do_gettimeofday(&buf->vb.ts);
 #endif
 
-	strm->framecount++;
-
 #ifdef USE_VIDEOBUF2
 	buf->vb.v4l2_buf.sequence = strm->framecount;
+	buf->vb.v4l2_buf.field = strm->field;
 	vb2_buffer_done(&buf->vb, VB2_BUF_STATE_DONE);
 #else
 	buf->vb.field_count = strm->framecount * 2;
 	buf->vb.state = VIDEOBUF_DONE;
 	wake_up(&buf->vb.done);
 #endif
+	strm->framecount++;
 	dprintk(2, "wakeup [buf/i] [%p/%d]\n", buf, 0);
 	return 0;
 }
@@ -4657,6 +4659,7 @@ static int queue_setup(struct vb2_queue *vq, const struct v4l2_format *fmt,
 
 	if (*nbuffers < S2226_MIN_BUFS)
 		*nbuffers = S2226_MIN_BUFS;
+
 	*nplanes = 1;
 	switch (strm->type) {
 	case S2226_STREAM_MPEG:
@@ -4850,15 +4853,15 @@ static int vidioc_querycap(struct file *file, void *priv,
 	cap->version = 0;
 	cap->capabilities = V4L2_CAP_STREAMING | V4L2_CAP_READWRITE;
 
-    switch (strm->type) {
-    default:
-        cap->capabilities |= V4L2_CAP_VIDEO_CAPTURE;
-        break;
-    case S2226_STREAM_DECODE:
-        cap->capabilities |= V4L2_CAP_VIDEO_OUTPUT;
-        break;
-    }
-
+	switch (strm->type) {
+	default:
+		cap->capabilities |= V4L2_CAP_VIDEO_CAPTURE;
+		cap->capabilities |= V4L2_CAP_AUDIO;
+		break;
+	case S2226_STREAM_DECODE:
+		cap->capabilities |= V4L2_CAP_VIDEO_OUTPUT;
+		break;
+	}
 
 #ifndef USE_VIDEOBUF2
 	cap->capabilities &= ~V4L2_CAP_READWRITE;
@@ -4869,6 +4872,7 @@ static int vidioc_querycap(struct file *file, void *priv,
     switch (strm->type) {
     default:
         cap->device_caps |= V4L2_CAP_VIDEO_CAPTURE;
+        cap->device_caps |= V4L2_CAP_AUDIO;
         break;
     case S2226_STREAM_DECODE:
         cap->device_caps |= V4L2_CAP_VIDEO_OUTPUT;
@@ -5064,6 +5068,10 @@ static int vidioc_try_fmt_vid_cap(struct file *file, void *priv,
 		w = f->fmt.pix.width;
 		h = f->fmt.pix.height;
 		s2226_max_height_width(dev->cur_input, &maxh, &maxw);
+		if (w <= 0)
+			w = strm->width;
+		if (h <= 0)
+			h = strm->height;
 		if (h >= maxh)
 			h = maxh;
 		if (w >= maxw)
@@ -5168,10 +5176,9 @@ static int vidioc_s_fmt_vid_cap(struct file *file, void *priv,
 	strm->width = f->fmt.pix.width;
 	strm->height = f->fmt.pix.height;
 	strm->fourcc = f->fmt.pix.pixelformat;
-    strm->field = f->fmt.pix.field;
+	strm->field = f->fmt.pix.field;
 
 	s2226_set_attr(dev, ATTR_SCALE_X, f->fmt.pix.width);
-
 	
 	if (IS_PROG_INPUT(dev->cur_input))
 		single = 1;
@@ -5592,6 +5599,10 @@ static int vidioc_enum_input(struct file *file, void *priv,
 	inp->type = V4L2_INPUT_TYPE_CAMERA;
 	inp->std = S2226_NORMS;
 	inp->status = 0;
+        inp->audioset = (1 << S2226_AUDIOINPUT_LINE) |
+		(1 << S2226_AUDIOINPUT_TONE) | 
+		(1 << S2226_AUDIOINPUT_SDI);
+
 	switch (inp->index) {
 	case S2226_INPUT_COMPOSITE_0:
 		strlcpy(inp->name, "Composite 0", sizeof(inp->name));
@@ -7204,6 +7215,7 @@ static int s2226_probe_v4l(struct s2226_dev *dev)
 		INIT_LIST_HEAD(&strm->buf_list);
 		strm->width = S2226_DEF_PREVIEW_X;
 		strm->height = S2226_DEF_PREVIEW_Y;
+		strm->field = V4L2_FIELD_TOP;
 		if (i == 1)
 			strm->fourcc = V4L2_PIX_FMT_UYVY;
 		else
