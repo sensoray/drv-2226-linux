@@ -58,7 +58,7 @@
 #endif
 
 /* update with each new version for easy detection of driver */
-#define S2226_VERSION "1.0.9"
+#define S2226_VERSION "1.0.10"
 
 #define KERNEL_VERSION_V4L2TIMESTAMP KERNEL_VERSION(3, 9, 0)
 
@@ -387,6 +387,7 @@ struct s2226_stream {
 	int m_pos;
 	int m_copied;
 	int framecount;
+	int vframe;  // internal count
 	spinlock_t qlock;
 #ifdef USE_VIDEOBUF2
 	struct vb2_queue vb_vidq;
@@ -4460,6 +4461,7 @@ static int s2226_got_data(struct s2226_stream *strm, unsigned char *tbuf, unsign
 	buf->vb.size = tlen;
 #endif
 
+
 #ifdef USE_VIDEOBUF2
 #if LINUX_VERSION_CODE < KERNEL_VERSION_V4L2TIMESTAMP
 	do_gettimeofday(&buf->vb.v4l2_buf.timestamp);
@@ -4490,6 +4492,8 @@ static int s2226_got_preview_data(struct s2226_stream *strm, unsigned char *tbuf
 	unsigned long flags = 0;
 	char *vbuf;
 	int i;
+	int bsize;
+	int csize;
 #ifndef USE_VIDEOBUF2
 	struct s2226_dmaqueue *dma_q = &strm->vidq;
 #endif
@@ -4500,6 +4504,7 @@ static int s2226_got_preview_data(struct s2226_stream *strm, unsigned char *tbuf
 			strm->m_copied = 0;
 			strm->m_lines = 0;
 			strm->m_pos = 0;
+			strm->vframe++;
 			return 0;
 		}
 		if ((tbuf[0] == INTTYPE_ASYNCEVENT) &&
@@ -4509,7 +4514,7 @@ static int s2226_got_preview_data(struct s2226_stream *strm, unsigned char *tbuf
 		}
 	}
 
-	if (strm->m_sync)
+	if (strm->m_sync || (strm->vframe <= 2))
 		return 0;
 
 #ifdef USE_VIDEOBUF2
@@ -4555,29 +4560,42 @@ static int s2226_got_preview_data(struct s2226_stream *strm, unsigned char *tbuf
 		return 0;
 	}
 
+	if (strm->fourcc == V4L2_PIX_FMT_GREY)
+		tlen /= 2;
+	
 #ifdef USE_VIDEOBUF2
-	if (strm->m_pos + tlen >= vb2_plane_size(&buf->vb, 0))
-		tlen = vb2_plane_size(&buf->vb, 0) - strm->m_pos;
+	bsize = vb2_plane_size(&buf->vb, 0);
 #else
-	if (strm->m_pos + tlen >= buf->vb.bsize)
-		tlen = buf->vb.bsize - strm->m_pos;
+	bsize = buf->vb.bsize;
+#endif
+	
+	if (strm->m_pos + tlen >= bsize) {
+		tlen = bsize - strm->m_pos;
+	}
+
+	if (strm->fourcc == V4L2_PIX_FMT_GREY) {
+		int j;
+		unsigned char *pbuf;
+		pbuf = vbuf + strm->m_pos;
+		for (j = 0; j < tlen; j++) {
+			*pbuf++ = tbuf[2*j + 1];
+		}
+		strm->m_pos += tlen;
+	} else {
+		memcpy(vbuf + strm->m_pos, tbuf, tlen);
+		strm->m_pos += tlen;
+	}
+
+#ifdef USE_VIDEOBUF2
+	csize = vb2_get_plane_payload(&buf->vb, 0);
+#else
+	csize = buf->vb.bsize;
 #endif
 
-
-	memcpy(vbuf + strm->m_pos, tbuf, tlen);
-	strm->m_pos += tlen;
-
-#ifdef USE_VIDEOBUF2
-	if (strm->m_pos < vb2_get_plane_payload(&buf->vb, 0)) {
+	if (strm->m_pos < csize) {
 		spin_unlock_irqrestore(&strm->qlock, flags);
 		return 0;
 	}
-#else
-	if (strm->m_pos < buf->vb.bsize) {
-		spin_unlock_irqrestore(&strm->qlock, flags);
-		return 0;
-	}
-#endif
 	strm->m_sync = 1;
 
 #ifdef USE_VIDEOBUF2
@@ -4591,40 +4609,45 @@ static int s2226_got_preview_data(struct s2226_stream *strm, unsigned char *tbuf
 		int j;
 		unsigned char *pf1, *pf2;
 		unsigned char *pbuf;
+		int depth = 2;
 #ifdef USE_VIDEOBUF2
 		pf1 = vb2_plane_vaddr(&buf->vb, 0);
 #else
 		pf1 = videobuf_to_vmalloc(&buf->vb);
 #endif
+		
+		if (strm->fourcc == V4L2_PIX_FMT_GREY)
+			depth = 1;
+
 		pbuf = pf1;
-		pf2 = pf1 + strm->height * strm->width;
+		pf2 = pf1 + (strm->height * strm->width * depth) / 2;
 		/* copy first field to temp store */
 		memcpy(strm->f1, pf1, strm->height*strm->width);
-
 		/* move second field into the frame */
 		for (j = 0; j < strm->height / 2; j++) {
-			pf1 += strm->width * 2;
-			memcpy(pf1, pf2, strm->width * 2);
-			pf2 += strm->width * 2;
-			pf1 += strm->width * 2;
-			if ((unsigned long) (pf1 - pbuf) >= (strm->width*strm->height*2))
+			pf1 += strm->width * depth;
+			memcpy(pf1, pf2, strm->width * depth);
+			pf2 += strm->width * depth;
+			pf1 += strm->width * depth;
+			if ((unsigned long) (pf1 - pbuf) >= (strm->width*strm->height*depth))
 				break;
 		}
 		/* move first field back into the frame */
 		pf1 = strm->f1;
 		pf2 = pbuf;
 		for (j = 0; j < strm->height / 2; j++) {
-			memcpy(pf2, pf1, strm->width * 2);
-			pf2 += strm->width * 2;
-			pf2 += strm->width * 2;
-			pf1 += strm->width * 2;
-			if ((unsigned long) (pf2 - pbuf) >= (strm->width*strm->height*2))
+			memcpy(pf2, pf1, strm->width * depth);
+			pf2 += strm->width * depth;
+			pf2 += strm->width * depth;
+			pf1 += strm->width * depth;
+			if ((unsigned long) (pf2 - pbuf) >= (strm->width*strm->height*depth))
 				break;
 		}
 	}
 
 #ifdef USE_VIDEOBUF2
 	buf->vb.v4l2_buf.length = vb2_get_plane_payload(&buf->vb, 0);
+	bsize = buf->vb.v4l2_buf.length;
 #if LINUX_VERSION_CODE < KERNEL_VERSION_V4L2TIMESTAMP
 	do_gettimeofday(&buf->vb.v4l2_buf.timestamp);
 #else
@@ -4632,8 +4655,25 @@ static int s2226_got_preview_data(struct s2226_stream *strm, unsigned char *tbuf
 #endif
 #else
 	buf->vb.size = buf->vb.bsize;
+	bsize = buf->vb.size;
 	do_gettimeofday(&buf->vb.ts);
 #endif
+
+	if (strm->fourcc == V4L2_PIX_FMT_YUYV) {
+		int j;
+		unsigned char *pbuf;
+		unsigned char tmp;
+#ifdef USE_VIDEOBUF2
+		pbuf = vb2_plane_vaddr(&buf->vb, 0);
+#else
+		pbuf = videobuf_to_vmalloc(&buf->vb);
+#endif
+		for (j = 0; j < bsize; j+=2) {
+			tmp = pbuf[j];
+			pbuf[j] = pbuf[j+1];
+			pbuf[j+1] = tmp;
+		}
+	}
 
 #ifdef USE_VIDEOBUF2
 	buf->vb.v4l2_buf.sequence = strm->framecount;
@@ -4656,7 +4696,7 @@ static int queue_setup(struct vb2_queue *vq, const struct v4l2_format *fmt,
 		       unsigned int sizes[], void *alloc_ctxs[])
 {
 	struct s2226_stream *strm = vb2_get_drv_priv(vq);
-
+	int depth = 2;
 	if (*nbuffers < S2226_MIN_BUFS)
 		*nbuffers = S2226_MIN_BUFS;
 
@@ -4666,7 +4706,9 @@ static int queue_setup(struct vb2_queue *vq, const struct v4l2_format *fmt,
 		sizes[0] = S2226_MPEG_BUFFER_SIZE;
 		break;
 	case S2226_STREAM_PREVIEW:
-		sizes[0] = strm->width * strm->height * 2;
+		if (strm->fourcc == V4L2_PIX_FMT_GREY)
+			depth = 1;
+		sizes[0] = strm->width * strm->height * depth;
 		break;
 	}
 	dprintk(2, "buffer setup size: %d\n", sizes[0]);
@@ -4680,6 +4722,7 @@ static int buffer_prepare(struct vb2_buffer *vb)
 	struct s2226_stream *strm = vb2_get_drv_priv(vb->vb2_queue);
 	int w = strm->width;
 	int h = strm->height;
+	int depth = 2;
 	unsigned long size;
 	dprintk(2, "%s: h %d, w %d\n", __func__, h, w);
 	switch (strm->type) {
@@ -4687,7 +4730,9 @@ static int buffer_prepare(struct vb2_buffer *vb)
 		size = S2226_MPEG_BUFFER_SIZE;
 		break;
 	case S2226_STREAM_PREVIEW:
-		size = w * h * 2;
+		if (strm->fourcc == V4L2_PIX_FMT_GREY)
+			depth = 1;
+		size = w * h * depth;
 		break;
 	default:
 		return -EINVAL;
@@ -4735,6 +4780,7 @@ static int buffer_setup_vb1(struct videobuf_queue *vq, unsigned int *count,
 	struct s2226_stream *strm = fh->strm;
 	int w = strm->width;
 	int h = strm->height;
+	int depth = 2;
 
 	dprintk(0, "%s: h %d, w %d\n", __func__, h, w);
 	switch (strm->type) {
@@ -4742,7 +4788,9 @@ static int buffer_setup_vb1(struct videobuf_queue *vq, unsigned int *count,
 		*size = S2226_MPEG_BUFFER_SIZE;
 		break;
 	case S2226_STREAM_PREVIEW:
-		*size = w * h * 2;
+		if (strm->fourcc == V4L2_PIX_FMT_GREY)
+			depth = 1;
+		*size = w * h * depth;
 		break;
 	default:
 		break;
@@ -4897,6 +4945,7 @@ struct s2226_fmt {
 };
 
 /* formats */
+#define NUM_FORMAT_MPEG 1
 static const struct s2226_fmt formats_mpeg[] = {
 	{
 		.name = "MPEGTS_H264",
@@ -4907,11 +4956,24 @@ static const struct s2226_fmt formats_mpeg[] = {
 	}
 };
 
+#define NUM_FORMAT_PREVIEW 3
 static const struct s2226_fmt formats_preview[] = {
 	{
 		.name = "4:2:2, packed, UYVY",
 		.fourcc = V4L2_PIX_FMT_UYVY,
 		.depth = 16,
+		.flags = 0,
+		.type = V4L2_BUF_TYPE_VIDEO_CAPTURE,
+	}, {
+		.name = "4:2:2, packed, YUY2",
+		.fourcc = V4L2_PIX_FMT_YUYV,
+		.depth = 16,
+		.flags = 0,
+		.type = V4L2_BUF_TYPE_VIDEO_CAPTURE,
+	}, {
+		.name = "8bpp GREY(Y8)",
+		.fourcc = V4L2_PIX_FMT_GREY,
+		.depth = 8,
 		.flags = 0,
 		.type = V4L2_BUF_TYPE_VIDEO_CAPTURE,
 	},
@@ -4990,13 +5052,14 @@ static int vidioc_enum_fmt_vid_cap(struct file *file, void *priv,
 	int index = 0;
 	struct s2226_stream *strm = video_drvdata(file);
 	const struct s2226_fmt *formats;
+	int numf = (strm->type == S2226_STREAM_PREVIEW) ? NUM_FORMAT_PREVIEW : NUM_FORMAT_MPEG;
 	dprintk(4, "%s 2226\n", __func__);
 	if (f == NULL)
 		return -EINVAL;
 
 	index = f->index;
 
-	if (index >= 1)
+	if (index >= numf)
 		return -EINVAL;
 
 	formats = (strm->type != S2226_STREAM_PREVIEW) ? formats_mpeg : formats_preview;
@@ -5019,8 +5082,13 @@ static int vidioc_g_fmt_vid_cap(struct file *file, void *priv,
 		f->fmt.pix.field = strm->field;
 		f->fmt.pix.width = strm->width;
 		f->fmt.pix.height = strm->height;
-		f->fmt.pix.bytesperline = strm->width*2;
-		f->fmt.pix.sizeimage = strm->width*strm->height*2;
+		if (strm->fourcc == V4L2_PIX_FMT_GREY) {
+			f->fmt.pix.bytesperline = strm->width;
+			f->fmt.pix.sizeimage = strm->width*strm->height;
+		} else {
+			f->fmt.pix.bytesperline = strm->width*2;
+			f->fmt.pix.sizeimage = strm->width*strm->height*2;
+		}
 		f->fmt.pix.colorspace = V4L2_COLORSPACE_SMPTE170M;
 		break;
 	case S2226_STREAM_MPEG:
@@ -5039,7 +5107,6 @@ static int vidioc_g_fmt_vid_cap(struct file *file, void *priv,
 }
 
 
-
 static int vidioc_try_fmt_vid_cap(struct file *file, void *priv,
 				  struct v4l2_format *f)
 {
@@ -5056,13 +5123,25 @@ static int vidioc_try_fmt_vid_cap(struct file *file, void *priv,
 	is_ntsc = !dev->v4l_is_pal;
 	dprintk(4, "%s\n", __func__);
 
-	if (f->fmt.pix.pixelformat != V4L2_PIX_FMT_MPEG &&
-	    f->fmt.pix.pixelformat != V4L2_PIX_FMT_UYVY) {
-		dprintk(1, "%s wrong format %x %x\n", __func__,
-			f->fmt.pix.pixelformat, V4L2_PIX_FMT_UYVY);
-		return -EINVAL;
+	if (is_mpeg) {
+		if (f->fmt.pix.pixelformat != V4L2_PIX_FMT_MPEG) {
+			dprintk(1, "%s wrong format %x %x\n", __func__,
+				f->fmt.pix.pixelformat, V4L2_PIX_FMT_MPEG);
+			return -EINVAL;
+		}
+	} else {
+		switch (f->fmt.pix.pixelformat) {
+		default:
+			dprintk(1, "%s wrong format %x %x\n", __func__,
+				f->fmt.pix.pixelformat, V4L2_PIX_FMT_UYVY);
+			return -EINVAL;
+		case V4L2_PIX_FMT_UYVY:
+		case V4L2_PIX_FMT_YUYV:
+		case V4L2_PIX_FMT_GREY:
+			break;
+		}
 	}
-	f->fmt.pix.pixelformat = formats[0].fourcc;
+	
 	if (!is_mpeg) {
 		int w, h;
 		w = f->fmt.pix.width;
@@ -5084,14 +5163,18 @@ static int vidioc_try_fmt_vid_cap(struct file *file, void *priv,
 			else
 				f->fmt.pix.field = V4L2_FIELD_INTERLACED;
 		}
-		f->fmt.pix.pixelformat = V4L2_PIX_FMT_UYVY;
 		f->fmt.pix.height = h;
 		f->fmt.pix.width = w;
 		f->fmt.pix.bytesperline = w * 2;
 		f->fmt.pix.sizeimage = w * h * 2;
+		if (f->fmt.pix.pixelformat == V4L2_PIX_FMT_GREY) {
+			f->fmt.pix.bytesperline /= 2;
+			f->fmt.pix.sizeimage /= 2;
+		}
 		f->fmt.pix.colorspace = V4L2_COLORSPACE_SMPTE170M;
 		f->fmt.pix.priv = 0;
 	} else {
+		f->fmt.pix.pixelformat = formats[0].fourcc;
 		f->fmt.pix.field = V4L2_FIELD_NONE;
 		f->fmt.pix.bytesperline = 0;
 		f->fmt.pix.sizeimage = S2226_MPEG_BUFFER_SIZE;
@@ -5251,6 +5334,7 @@ static int start_streaming(struct vb2_queue *vq, unsigned int count)
 	}
 	strm->active = 1;
 	strm->framecount = 0;
+	strm->vframe = 0;
 	strm->m_pos = 0;
 	return 0;
 }
@@ -7087,6 +7171,7 @@ static int vidioc_streamon(struct file *file, void *priv, enum v4l2_buf_type i)
 		break;
 	}
 	strm->active = 1;
+	strm->vframe = 0;
 	strm->framecount = 0;
 	strm->m_pos = 0;
 	return 0;
@@ -7217,7 +7302,7 @@ static int s2226_probe_v4l(struct s2226_dev *dev)
 		strm->height = S2226_DEF_PREVIEW_Y;
 		strm->field = V4L2_FIELD_TOP;
 		if (i == 1)
-			strm->fourcc = V4L2_PIX_FMT_UYVY;
+			strm->fourcc = V4L2_PIX_FMT_UYVY; // default
 		else
 			strm->fourcc = V4L2_PIX_FMT_MPEG;
 		if (i == 0) {
