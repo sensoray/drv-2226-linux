@@ -5588,9 +5588,6 @@ static int vidioc_s_std(struct file *file, void *priv, v4l2_std_id *i)
 		case S2226_INPUT_SDI_720P_2398:
 		case S2226_INPUT_SDI_1080P_2398:
 			return -EINVAL;
-		case S2226_INPUT_SD_COLORBARS:
-			if (dev->v4l_is_pal)
-				return -EINVAL;
 		default:
 			break;
 		}
@@ -5604,9 +5601,6 @@ static int vidioc_s_std(struct file *file, void *priv, v4l2_std_id *i)
 		case S2226_INPUT_SDI_720P_24:
 		case S2226_INPUT_SDI_1080P_24:
 			return -EINVAL;
-		case S2226_INPUT_SD_COLORBARS:
-			if (!dev->v4l_is_pal)
-				return -EINVAL;
 		default:
 			break;
 		}
