@@ -1,4 +1,3 @@
-// Copyright Sensoray 2009-2014
 #ifndef H51REG_H_1234
 #define H51REG_H_1234
 

@@ -1,13 +1,13 @@
 /*
  * 2226 USB Linux driver
- * Copyright (C) 2009-2014 Sensoray Company Inc.
+ * Copyright (C) 2009-2017 Sensoray Company Inc.
  *
  *      This program is free software; you can redistribute it and/or
  *      modify it under the terms of the GNU General Public License as
  *      published by the Free Software Foundation, version 2.
  *
  * @author: D.A., P.E.
- * @date: 2009-2014
+ * @date: 2009-2017
  */
 #include <linux/version.h>
 #if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 18)
@@ -58,7 +58,7 @@
 #endif
 
 /* update with each new version for easy detection of driver */
-#define S2226_VERSION "1.0.10"
+#define S2226_VERSION "1.1.4"
 
 #define KERNEL_VERSION_V4L2TIMESTAMP KERNEL_VERSION(3, 9, 0)
 
@@ -284,7 +284,13 @@ struct s2226_dev;
 #define    S2226_INPUT_SDI_720P_2398   15
 #define    S2226_INPUT_SDI_1080P_24    16
 #define    S2226_INPUT_SDI_1080P_2398  17
-#define    S2226_INPUT_MAX             18
+#define    S2226_INPUT_1080P_30        18
+#define    S2226_INPUT_1080P_2997      19
+#define    S2226_INPUT_1080P_CB_24     20
+#define    S2226_INPUT_1080P_CB_2398   21
+#define    S2226_INPUT_1080P_CB_30     22
+#define    S2226_INPUT_1080P_CB_2997   23
+#define    S2226_INPUT_MAX             24
 
 /* inputs for MPEG decode */
 #define S2226_DECODE_480I       0
@@ -319,8 +325,13 @@ struct s2226_dev;
 #ifdef USE_VIDEOBUF2
 /* buffer for one video frame */
 struct s2226_buffer {
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 4, 0)
 	/* common v4l buffer stuff -- must be first */
 	struct vb2_buffer vb;
+#else
+	struct vb2_v4l2_buffer vb;
+#endif
+
 	struct list_head list;
 };
 #else
@@ -493,6 +504,7 @@ struct s2226_dev {
 	int                     fpga_ver;
 	int                     board_id;
 	int                     arm_ver;
+	unsigned int            serial_num;
 	int                     minor;
 	int			dpb_size;
 	int			gop_struct;
@@ -2289,6 +2301,12 @@ static int s2226_new_input(struct s2226_dev *dev, int input)
 		vFormat = VFMT_1080_24p;
 		frRed = 1;
 		break;
+	case INPUT_SDI_1080P_30_CB:
+	case INPUT_SDI_1080P_2997_CB:
+	case INPUT_SDI_1080P_30:
+	case INPUT_SDI_1080P_2997:		
+		break;
+		
 	default:
 		dev_warn(&dev->udev->dev,
 			 "s2226: unknown input %d!\n", input);
@@ -3476,10 +3494,12 @@ static int s2226_probe(struct usb_interface *interface,
 	struct s2226_dev *dev = NULL;
 	struct usb_host_interface *iface_desc;
 	struct usb_endpoint_descriptor *endpoint;
+	unsigned char serial_buf[16];
 	int i;
 	int in_count = 0; /* number of in endpoints */
 	int out_count = 0; /* number of out endpoints */
 	int rc = -ENOMEM;
+	int rbuf_len;
 	/* required sleep for device to boot.  do not remove */
 	msleep(1150);
 	pr_info("[s2226] %s\n", S2226_VERSION);
@@ -3506,11 +3526,11 @@ static int s2226_probe(struct usb_interface *interface,
 	dev->m->type = S2226_STREAM_MPEG;
 	dev->p->type = S2226_STREAM_PREVIEW;
 	dev->d->type = S2226_STREAM_DECODE;
-    dev->p->f1 = vmalloc(1920*1280);
-    if (dev->p->f1 == NULL) {
+	dev->p->f1 = vmalloc(1920*1280);
+	if (dev->p->f1 == NULL) {
 		pr_info("s2226: out of memory");
 		goto error;
-    }
+	}
 	dev->fpga_ver = -1;
 	dev->cfg_intf = -1;
 	dev->alt_intf = -1;
@@ -3654,8 +3674,31 @@ static int s2226_probe(struct usb_interface *interface,
 	dev->cur_audio_mpeg = AMUX_MPEG_IN_LINE_IN;
 	dev->cur_audio_lineout = AMUX_LINE_OUT_MPEG_OUT;
 	dev->cur_audio_sdiout = AMUX_SDI_OUT_MPEG_OUT;
-	s2226_probe_v4l(dev);
+
 	s2226_get_fpga_ver(dev);
+	// get the serial number
+	//printk("board id %d\n", dev->board_id);
+	// REV.A is board_id 1, REV.B is board_id 2
+	if (dev->board_id <= 1) {
+		rc = send_flash_read(dev, SERIAL_NUM_LOCATION_REVA+8*1024-16, 16, serial_buf, &rbuf_len);
+	} else {
+		rc = send_flash_read(dev, SERIAL_NUM_LOCATION_REVB+8*1024-16, 16, serial_buf, &rbuf_len);
+	}
+	if (rc == 0) {
+		if (serial_buf[0] == 0xaa && serial_buf[1] == 0xbb &&
+		    serial_buf[2] == 0xcc && serial_buf[3] == 0xdd) {
+			dev->serial_num = (serial_buf[12] << 24);
+			dev->serial_num |= (serial_buf[13] << 16);
+			dev->serial_num |= (serial_buf[14] << 8);
+			dev->serial_num |= (serial_buf[15] << 0);
+		} else {
+			dev->serial_num = 0;
+		}
+	} else {
+		dev->serial_num = 0;
+	}
+	printk("s2226: SN: %d\n", dev->serial_num);
+	s2226_probe_v4l(dev);
 	s2226_set_interface(dev, 0, 0, 1);
 	dev_info(&dev->udev->dev, "s2226: probe success\n");
 	return 0;
@@ -4435,7 +4478,11 @@ static int s2226_got_data(struct s2226_stream *strm, unsigned char *tbuf, unsign
 	buf = list_entry(strm->buf_list.next,
 			 struct s2226_buffer, list);
 	list_del(&buf->list);
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 4, 0)
 	vbuf = vb2_plane_vaddr(&buf->vb, 0);
+#else
+	vbuf = vb2_plane_vaddr(&buf->vb.vb2_buf, 0);
+#endif
 #else
 	spin_lock_irqsave(&strm->qlock, flags);
 	if (list_empty(&dma_q->active)) {
@@ -4456,20 +4503,42 @@ static int s2226_got_data(struct s2226_stream *strm, unsigned char *tbuf, unsign
 	memcpy(vbuf, tbuf, tlen);
 
 #ifdef USE_VIDEOBUF2
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 4, 0)
 	buf->vb.v4l2_buf.length = tlen;
 #else
+	vb2_set_plane_payload(&buf->vb.vb2_buf, 0, tlen);
+#endif
+#else
+
 	buf->vb.size = tlen;
 #endif
 
 
 #ifdef USE_VIDEOBUF2
+
 #if LINUX_VERSION_CODE < KERNEL_VERSION_V4L2TIMESTAMP
 	do_gettimeofday(&buf->vb.v4l2_buf.timestamp);
 #else
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 4, 0)
 	v4l2_get_timestamp(&buf->vb.v4l2_buf.timestamp);
+#else
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 5, 0)
+	v4l2_get_timestamp(&buf->vb.timestamp);
+#else
+	buf->vb.vb2_buf.timestamp = ktime_get_ns();
 #endif
+#endif
+#endif
+
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 4, 0)
 	buf->vb.v4l2_buf.sequence = strm->framecount++;
+	buf->vb.v4l2_buf.field = strm->framecount * 2;
 	vb2_buffer_done(&buf->vb, VB2_BUF_STATE_DONE);
+#else
+	buf->vb.sequence = strm->framecount++;
+	buf->vb.field = strm->framecount * 2;
+	vb2_buffer_done(&buf->vb.vb2_buf, VB2_BUF_STATE_DONE);
+#endif
 #else
 	do_gettimeofday(&buf->vb.ts);
 	buf->vb.field_count = strm->framecount * 2;
@@ -4526,7 +4595,12 @@ static int s2226_got_preview_data(struct s2226_stream *strm, unsigned char *tbuf
 	}
 	buf = list_entry(strm->buf_list.next,
 			 struct s2226_buffer, list);
+
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 4, 0)
 	vbuf = vb2_plane_vaddr(&buf->vb, 0);
+#else
+	vbuf = vb2_plane_vaddr(&buf->vb.vb2_buf, 0);
+#endif
 #else
 	spin_lock_irqsave(&strm->qlock, flags);
 	if (list_empty(&dma_q->active)) {
@@ -4564,7 +4638,12 @@ static int s2226_got_preview_data(struct s2226_stream *strm, unsigned char *tbuf
 		tlen /= 2;
 	
 #ifdef USE_VIDEOBUF2
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 4, 0)
 	bsize = vb2_plane_size(&buf->vb, 0);
+#else
+	bsize = vb2_plane_size(&buf->vb.vb2_buf, 0);
+#endif
+
 #else
 	bsize = buf->vb.bsize;
 #endif
@@ -4587,7 +4666,11 @@ static int s2226_got_preview_data(struct s2226_stream *strm, unsigned char *tbuf
 	}
 
 #ifdef USE_VIDEOBUF2
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 4, 0)
 	csize = vb2_get_plane_payload(&buf->vb, 0);
+#else
+	csize = vb2_get_plane_payload(&buf->vb.vb2_buf, 0);
+#endif
 #else
 	csize = buf->vb.bsize;
 #endif
@@ -4611,7 +4694,11 @@ static int s2226_got_preview_data(struct s2226_stream *strm, unsigned char *tbuf
 		unsigned char *pbuf;
 		int depth = 2;
 #ifdef USE_VIDEOBUF2
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 4, 0)
 		pf1 = vb2_plane_vaddr(&buf->vb, 0);
+#else
+		pf1 = vb2_plane_vaddr(&buf->vb.vb2_buf, 0);
+#endif
 #else
 		pf1 = videobuf_to_vmalloc(&buf->vb);
 #endif
@@ -4646,12 +4733,27 @@ static int s2226_got_preview_data(struct s2226_stream *strm, unsigned char *tbuf
 	}
 
 #ifdef USE_VIDEOBUF2
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 4, 0)
 	buf->vb.v4l2_buf.length = vb2_get_plane_payload(&buf->vb, 0);
 	bsize = buf->vb.v4l2_buf.length;
+#else
+//	buf->vb.length = vb2_get_plane_payload(&buf->vb.vb2_buf, 0);
+	bsize = vb2_get_plane_payload(&buf->vb.vb2_buf, 0);
+#endif
+
 #if LINUX_VERSION_CODE < KERNEL_VERSION_V4L2TIMESTAMP
 	do_gettimeofday(&buf->vb.v4l2_buf.timestamp);
 #else
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 4, 0)
 	v4l2_get_timestamp(&buf->vb.v4l2_buf.timestamp);
+#else
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 5, 0)
+	v4l2_get_timestamp(&buf->vb.timestamp);
+#else
+	buf->vb.vb2_buf.timestamp = ktime_get_ns();
+#endif
+#endif
+
 #endif
 #else
 	buf->vb.size = buf->vb.bsize;
@@ -4664,7 +4766,12 @@ static int s2226_got_preview_data(struct s2226_stream *strm, unsigned char *tbuf
 		unsigned char *pbuf;
 		unsigned char tmp;
 #ifdef USE_VIDEOBUF2
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 4, 0)
 		pbuf = vb2_plane_vaddr(&buf->vb, 0);
+#else
+		pbuf = vb2_plane_vaddr(&buf->vb.vb2_buf, 0);
+#endif
+
 #else
 		pbuf = videobuf_to_vmalloc(&buf->vb);
 #endif
@@ -4676,9 +4783,17 @@ static int s2226_got_preview_data(struct s2226_stream *strm, unsigned char *tbuf
 	}
 
 #ifdef USE_VIDEOBUF2
+
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 4, 0)
 	buf->vb.v4l2_buf.sequence = strm->framecount;
 	buf->vb.v4l2_buf.field = strm->field;
 	vb2_buffer_done(&buf->vb, VB2_BUF_STATE_DONE);
+#else
+	buf->vb.sequence = strm->framecount;
+	buf->vb.field = strm->field;
+	vb2_buffer_done(&buf->vb.vb2_buf, VB2_BUF_STATE_DONE);
+#endif
+
 #else
 	buf->vb.field_count = strm->framecount * 2;
 	buf->vb.state = VIDEOBUF_DONE;
@@ -4691,9 +4806,23 @@ static int s2226_got_preview_data(struct s2226_stream *strm, unsigned char *tbuf
 
 #ifdef USE_VIDEOBUF2
 /* videobuf2 info */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 8, 0)
+static int queue_setup(struct vb2_queue *vq,
+		       unsigned int *nbuffers, unsigned int *nplanes,
+		       unsigned int sizes[], struct device *alloc_ctxs[])
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(4, 5, 0)
+static int queue_setup(struct vb2_queue *vq,
+		       unsigned int *nbuffers, unsigned int *nplanes,
+		       unsigned int sizes[], void *alloc_ctxs[])
+#elif LINUX_VERSION_CODE > KERNEL_VERSION(4, 3, 0)
+static int queue_setup(struct vb2_queue *vq, const void *parg,
+		       unsigned int *nbuffers, unsigned int *nplanes,
+		       unsigned int sizes[], void *alloc_ctxs[])
+#else
 static int queue_setup(struct vb2_queue *vq, const struct v4l2_format *fmt,
 		       unsigned int *nbuffers, unsigned int *nplanes,
 		       unsigned int sizes[], void *alloc_ctxs[])
+#endif
 {
 	struct s2226_stream *strm = vb2_get_drv_priv(vq);
 	int depth = 2;
@@ -4718,7 +4847,12 @@ static int queue_setup(struct vb2_queue *vq, const struct v4l2_format *fmt,
 
 static int buffer_prepare(struct vb2_buffer *vb)
 {
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 4, 0)
 	struct s2226_buffer *buf = container_of(vb, struct s2226_buffer, vb);
+#else
+	struct vb2_v4l2_buffer *vbuf = to_vb2_v4l2_buffer(vb);
+	struct s2226_buffer *buf = container_of(vbuf, struct s2226_buffer, vb);
+#endif
 	struct s2226_stream *strm = vb2_get_drv_priv(vb->vb2_queue);
 	int w = strm->width;
 	int h = strm->height;
@@ -4741,13 +4875,22 @@ static int buffer_prepare(struct vb2_buffer *vb)
 		dprintk(2, "invalid buffer prepare\n");
 		return -EINVAL;
 	}
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 4, 0)
 	vb2_set_plane_payload(&buf->vb, 0, size);
+#else
+	vb2_set_plane_payload(&buf->vb.vb2_buf, 0, size);
+#endif
 	return 0;
 }
 
 static void buffer_queue(struct vb2_buffer *vb)
 {
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 4, 0)
 	struct s2226_buffer *buf = container_of(vb, struct s2226_buffer, vb);
+#else
+	struct vb2_v4l2_buffer *vbuf = to_vb2_v4l2_buffer(vb);
+	struct s2226_buffer *buf = container_of(vbuf, struct s2226_buffer, vb);
+#endif
 	struct s2226_stream *strm = vb2_get_drv_priv(vb->vb2_queue);
 	unsigned long flags = 0;
 	dprintk(4, "%s\n", __func__);
@@ -4757,7 +4900,12 @@ static void buffer_queue(struct vb2_buffer *vb)
 }
 
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(3, 16, 0)
 static int stop_streaming(struct vb2_queue *vq);
+#else
+static void stop_streaming(struct vb2_queue *vq);
+#endif
+
 static int start_streaming(struct vb2_queue *vq, unsigned int count);
 
 static struct vb2_ops s2226_vb2_ops = {
@@ -4813,7 +4961,12 @@ static int buffer_prepare_vb1(struct videobuf_queue *vq, struct videobuf_buffer 
 {
 	struct s2226_fh *fh = vq->priv_data;
 	struct s2226_stream *strm = fh->strm;
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 4, 0)
 	struct s2226_buffer *buf = container_of(vb, struct s2226_buffer, vb);
+#else
+	struct vb2_v4l2_buffer *vbuf = to_vb2_v4l2_buffer(vb);
+	struct s2226_buffer *buf = container_of(vbuf, struct s2226_buffer, vb);
+#endif
 	int rc;
 	dprintk(4, "%s, field=%d\n", __func__, field);
 
@@ -4839,7 +4992,12 @@ fail:
 
 static void buffer_queue_vb1(struct videobuf_queue *vq, struct videobuf_buffer *vb)
 {
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 4, 0)
 	struct s2226_buffer *buf = container_of(vb, struct s2226_buffer, vb);
+#else
+	struct vb2_v4l2_buffer *vbuf = to_vb2_v4l2_buffer(vb);
+	struct s2226_buffer *buf = container_of(vbuf, struct s2226_buffer, vb);
+#endif
 	struct s2226_fh *fh = vq->priv_data;
 	struct s2226_stream *strm = fh->strm;
 	struct s2226_dmaqueue *vidq = &strm->vidq;
@@ -4878,13 +5036,13 @@ static int vidioc_querycap(struct file *file, void *priv,
 	strlcpy(cap->driver, "s2226", sizeof(cap->driver));
 	switch (strm->type) {
 	case S2226_STREAM_MPEG:
-		strlcpy(cap->card, "Sensoray Model 2226 H.264", sizeof(cap->card));
+	  snprintf(cap->card, sizeof(cap->card) -1 , "2226 H.264 SN#%06d", dev->serial_num);
 		break;
 	case S2226_STREAM_PREVIEW:
-		strlcpy(cap->card, "Sensoray Model 2226 Preview", sizeof(cap->card));
+	  snprintf(cap->card, sizeof(cap->card) -1, "2226 Preview SN#%06d", dev->serial_num);
 		break;
 	case S2226_STREAM_DECODE:
-		strlcpy(cap->card, "Sensoray Model 2226 Decode", sizeof(cap->card));
+		snprintf(cap->card, sizeof(cap->card) -1, "2226 Decode SN#%06d", dev->serial_num);
 		break;
 	}
 
@@ -5197,6 +5355,12 @@ static int vidioc_try_fmt_vid_cap(struct file *file, void *priv,
 				f->fmt.pix.width = 1920;
 				f->fmt.pix.height = 720;
 				break;
+			case S2226_INPUT_1080P_CB_24:
+			case S2226_INPUT_1080P_CB_2398:
+			case S2226_INPUT_1080P_CB_30:
+			case S2226_INPUT_1080P_CB_2997:
+			case S2226_INPUT_1080P_30:
+			case S2226_INPUT_1080P_2997:
 			case S2226_INPUT_1080I_COLORBARS:
 			case S2226_INPUT_SDI_1080I_5994:
 			case S2226_INPUT_SDI_1080I_60:
@@ -5359,7 +5523,11 @@ static int s2226_stop_urbs(struct s2226_stream *strm, int bwrite)
 }
 
 #ifdef USE_VIDEOBUF2
+#if LINUX_VERSION_CODE < KERNEL_VERSION(3, 16, 0)
 static int stop_streaming(struct vb2_queue *vq)
+#else
+static void stop_streaming(struct vb2_queue *vq)
+#endif
 {
 	struct s2226_stream *strm = vb2_get_drv_priv(vq);
 	struct s2226_dev *dev = strm->dev;
@@ -5379,12 +5547,22 @@ static int stop_streaming(struct vb2_queue *vq)
 	spin_lock_irqsave(&strm->qlock, flags);
 	list_for_each_entry_safe(buf, node, &strm->buf_list, list) {
 		list_del(&buf->list);
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 4, 0)
 		vb2_buffer_done(&buf->vb, VB2_BUF_STATE_ERROR);
 		dprintk(2, "[%p/%d] done\n",
 			buf, buf->vb.v4l2_buf.index);
+#else
+		vb2_buffer_done(&buf->vb.vb2_buf, VB2_BUF_STATE_ERROR);
+		dprintk(2, "[%p] done\n",
+                buf);
+#endif
 	}
 	spin_unlock_irqrestore(&strm->qlock, flags);
+#if LINUX_VERSION_CODE < KERNEL_VERSION(3, 16, 0)
 	return 0;
+#else
+    return;
+#endif
 }
 #endif
 
@@ -5424,6 +5602,24 @@ static int s2226_new_v4l_input(struct s2226_dev *dev, int inp)
 		rc = s2226_new_input(dev, dev->v4l_is_pal ?
 				     INPUT_SDI_1080I_50_CB : INPUT_SDI_1080I_60_CB);
 		break;
+	case S2226_INPUT_1080P_CB_2997:
+		rc = s2226_new_input(dev, INPUT_SDI_1080P_2997_CB);
+		break;
+	case S2226_INPUT_1080P_CB_30:
+		rc = s2226_new_input(dev, INPUT_SDI_1080P_30_CB);
+		break;
+	case S2226_INPUT_1080P_2997:
+		rc = s2226_new_input(dev, INPUT_SDI_1080P_2997);
+		break;
+	case S2226_INPUT_1080P_30:
+		rc = s2226_new_input(dev, INPUT_SDI_1080P_30);
+		break;
+	case S2226_INPUT_1080P_CB_24:
+		rc = s2226_new_input(dev, INPUT_SDI_1080P_24_CB);
+		break;
+	case S2226_INPUT_1080P_CB_2398:
+		rc = s2226_new_input(dev, INPUT_SDI_1080P_2398_CB);
+		break;						
 	case S2226_INPUT_SDI_720P_5994:
 		rc = s2226_new_input(dev, INPUT_SDI_720P_5994);
 		dev->v4l_is_pal = 0;
@@ -5706,6 +5902,24 @@ static int vidioc_enum_input(struct file *file, void *priv,
 	case S2226_INPUT_1080I_COLORBARS:
 		strlcpy(inp->name, "1080i Colorbars", sizeof(inp->name));
 		break;
+	case S2226_INPUT_1080P_CB_24:
+		strlcpy(inp->name, "1080p24 Colorbars", sizeof(inp->name));
+		break;
+	case S2226_INPUT_1080P_CB_2398:
+		strlcpy(inp->name, "1080p23.98 Colorbars", sizeof(inp->name));
+		break;
+	case S2226_INPUT_1080P_CB_30:
+		strlcpy(inp->name, "1080p30 Colorbars", sizeof(inp->name));
+		break;
+	case S2226_INPUT_1080P_CB_2997:
+		strlcpy(inp->name, "1080p29.97 Colorbars", sizeof(inp->name));
+		break;
+	case S2226_INPUT_1080P_30:
+		strlcpy(inp->name, "SDI Input(1080p 30Hz NTSC)", sizeof(inp->name));		
+		break;
+	case S2226_INPUT_1080P_2997:
+		strlcpy(inp->name, "SDI Input(1080p 29.97Hz NTSC)", sizeof(inp->name));
+		break;		
 	case S2226_INPUT_SDI_720P_50:
 		strlcpy(inp->name, "SDI Input(720p 50Hz PAL)",
 			sizeof(inp->name));
@@ -5888,6 +6102,593 @@ static void ctrl_fill(struct v4l2_queryctrl *ctrl, enum v4l2_ctrl_type type,
 	ctrl->reserved[0] = 0;
 	ctrl->reserved[1] = 0;
 }
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 19, 0)
+
+/* Returns NULL or a character pointer array containing the menu for
+   the given control ID. The pointer array ends with a NULL pointer.
+   An empty string signifies a menu entry that is invalid. This allows
+   drivers to disable certain options if it is not supported. */
+const char * const *v4l2_ctrl_get_menu(u32 id)
+{
+	static const char * const mpeg_audio_sampling_freq[] = {
+		"44.1 kHz",
+		"48 kHz",
+		"32 kHz",
+		NULL
+	};
+	static const char * const mpeg_audio_encoding[] = {
+		"MPEG-1/2 Layer I",
+		"MPEG-1/2 Layer II",
+		"MPEG-1/2 Layer III",
+		"MPEG-2/4 AAC",
+		"AC-3",
+		NULL
+	};
+	static const char * const mpeg_audio_l1_bitrate[] = {
+		"32 kbps",
+		"64 kbps",
+		"96 kbps",
+		"128 kbps",
+		"160 kbps",
+		"192 kbps",
+		"224 kbps",
+		"256 kbps",
+		"288 kbps",
+		"320 kbps",
+		"352 kbps",
+		"384 kbps",
+		"416 kbps",
+		"448 kbps",
+		NULL
+	};
+	static const char * const mpeg_audio_l2_bitrate[] = {
+		"32 kbps",
+		"48 kbps",
+		"56 kbps",
+		"64 kbps",
+		"80 kbps",
+		"96 kbps",
+		"112 kbps",
+		"128 kbps",
+		"160 kbps",
+		"192 kbps",
+		"224 kbps",
+		"256 kbps",
+		"320 kbps",
+		"384 kbps",
+		NULL
+	};
+	static const char * const mpeg_audio_l3_bitrate[] = {
+		"32 kbps",
+		"40 kbps",
+		"48 kbps",
+		"56 kbps",
+		"64 kbps",
+		"80 kbps",
+		"96 kbps",
+		"112 kbps",
+		"128 kbps",
+		"160 kbps",
+		"192 kbps",
+		"224 kbps",
+		"256 kbps",
+		"320 kbps",
+		NULL
+	};
+	static const char * const mpeg_audio_ac3_bitrate[] = {
+		"32 kbps",
+		"40 kbps",
+		"48 kbps",
+		"56 kbps",
+		"64 kbps",
+		"80 kbps",
+		"96 kbps",
+		"112 kbps",
+		"128 kbps",
+		"160 kbps",
+		"192 kbps",
+		"224 kbps",
+		"256 kbps",
+		"320 kbps",
+		"384 kbps",
+		"448 kbps",
+		"512 kbps",
+		"576 kbps",
+		"640 kbps",
+		NULL
+	};
+	static const char * const mpeg_audio_mode[] = {
+		"Stereo",
+		"Joint Stereo",
+		"Dual",
+		"Mono",
+		NULL
+	};
+	static const char * const mpeg_audio_mode_extension[] = {
+		"Bound 4",
+		"Bound 8",
+		"Bound 12",
+		"Bound 16",
+		NULL
+	};
+	static const char * const mpeg_audio_emphasis[] = {
+		"No Emphasis",
+		"50/15 us",
+		"CCITT J17",
+		NULL
+	};
+	static const char * const mpeg_audio_crc[] = {
+		"No CRC",
+		"16-bit CRC",
+		NULL
+	};
+	static const char * const mpeg_audio_dec_playback[] = {
+		"Auto",
+		"Stereo",
+		"Left",
+		"Right",
+		"Mono",
+		"Swapped Stereo",
+		NULL
+	};
+	static const char * const mpeg_video_encoding[] = {
+		"MPEG-1",
+		"MPEG-2",
+		"MPEG-4 AVC",
+		NULL
+	};
+	static const char * const mpeg_video_aspect[] = {
+		"1x1",
+		"4x3",
+		"16x9",
+		"2.21x1",
+		NULL
+	};
+	static const char * const mpeg_video_bitrate_mode[] = {
+		"Variable Bitrate",
+		"Constant Bitrate",
+		NULL
+	};
+	static const char * const mpeg_stream_type[] = {
+		"MPEG-2 Program Stream",
+		"MPEG-2 Transport Stream",
+		"MPEG-1 System Stream",
+		"MPEG-2 DVD-compatible Stream",
+		"MPEG-1 VCD-compatible Stream",
+		"MPEG-2 SVCD-compatible Stream",
+		NULL
+	};
+	static const char * const mpeg_stream_vbi_fmt[] = {
+		"No VBI",
+		"Private Packet, IVTV Format",
+		NULL
+	};
+	static const char * const camera_power_line_frequency[] = {
+		"Disabled",
+		"50 Hz",
+		"60 Hz",
+		"Auto",
+		NULL
+	};
+	static const char * const camera_exposure_auto[] = {
+		"Auto Mode",
+		"Manual Mode",
+		"Shutter Priority Mode",
+		"Aperture Priority Mode",
+		NULL
+	};
+	static const char * const camera_exposure_metering[] = {
+		"Average",
+		"Center Weighted",
+		"Spot",
+		"Matrix",
+		NULL
+	};
+	static const char * const camera_auto_focus_range[] = {
+		"Auto",
+		"Normal",
+		"Macro",
+		"Infinity",
+		NULL
+	};
+	static const char * const colorfx[] = {
+		"None",
+		"Black & White",
+		"Sepia",
+		"Negative",
+		"Emboss",
+		"Sketch",
+		"Sky Blue",
+		"Grass Green",
+		"Skin Whiten",
+		"Vivid",
+		"Aqua",
+		"Art Freeze",
+		"Silhouette",
+		"Solarization",
+		"Antique",
+		"Set Cb/Cr",
+		NULL
+	};
+	static const char * const auto_n_preset_white_balance[] = {
+		"Manual",
+		"Auto",
+		"Incandescent",
+		"Fluorescent",
+		"Fluorescent H",
+		"Horizon",
+		"Daylight",
+		"Flash",
+		"Cloudy",
+		"Shade",
+		NULL,
+	};
+	static const char * const camera_iso_sensitivity_auto[] = {
+		"Manual",
+		"Auto",
+		NULL
+	};
+	static const char * const scene_mode[] = {
+		"None",
+		"Backlight",
+		"Beach/Snow",
+		"Candle Light",
+		"Dusk/Dawn",
+		"Fall Colors",
+		"Fireworks",
+		"Landscape",
+		"Night",
+		"Party/Indoor",
+		"Portrait",
+		"Sports",
+		"Sunset",
+		"Text",
+		NULL
+	};
+	static const char * const tune_emphasis[] = {
+		"None",
+		"50 Microseconds",
+		"75 Microseconds",
+		NULL,
+	};
+	static const char * const header_mode[] = {
+		"Separate Buffer",
+		"Joined With 1st Frame",
+		NULL,
+	};
+	static const char * const multi_slice[] = {
+		"Single",
+		"Max Macroblocks",
+		"Max Bytes",
+		NULL,
+	};
+	static const char * const entropy_mode[] = {
+		"CAVLC",
+		"CABAC",
+		NULL,
+	};
+	static const char * const mpeg_h264_level[] = {
+		"1",
+		"1b",
+		"1.1",
+		"1.2",
+		"1.3",
+		"2",
+		"2.1",
+		"2.2",
+		"3",
+		"3.1",
+		"3.2",
+		"4",
+		"4.1",
+		"4.2",
+		"5",
+		"5.1",
+		NULL,
+	};
+	static const char * const h264_loop_filter[] = {
+		"Enabled",
+		"Disabled",
+		"Disabled at Slice Boundary",
+		NULL,
+	};
+	static const char * const h264_profile[] = {
+		"Baseline",
+		"Constrained Baseline",
+		"Main",
+		"Extended",
+		"High",
+		"High 10",
+		"High 422",
+		"High 444 Predictive",
+		"High 10 Intra",
+		"High 422 Intra",
+		"High 444 Intra",
+		"CAVLC 444 Intra",
+		"Scalable Baseline",
+		"Scalable High",
+		"Scalable High Intra",
+		"Multiview High",
+		NULL,
+	};
+	static const char * const vui_sar_idc[] = {
+		"Unspecified",
+		"1:1",
+		"12:11",
+		"10:11",
+		"16:11",
+		"40:33",
+		"24:11",
+		"20:11",
+		"32:11",
+		"80:33",
+		"18:11",
+		"15:11",
+		"64:33",
+		"160:99",
+		"4:3",
+		"3:2",
+		"2:1",
+		"Extended SAR",
+		NULL,
+	};
+	static const char * const h264_fp_arrangement_type[] = {
+		"Checkerboard",
+		"Column",
+		"Row",
+		"Side by Side",
+		"Top Bottom",
+		"Temporal",
+		NULL,
+	};
+	static const char * const h264_fmo_map_type[] = {
+		"Interleaved Slices",
+		"Scattered Slices",
+		"Foreground with Leftover",
+		"Box Out",
+		"Raster Scan",
+		"Wipe Scan",
+		"Explicit",
+		NULL,
+	};
+	static const char * const mpeg_mpeg4_level[] = {
+		"0",
+		"0b",
+		"1",
+		"2",
+		"3",
+		"3b",
+		"4",
+		"5",
+		NULL,
+	};
+	static const char * const mpeg4_profile[] = {
+		"Simple",
+		"Advanced Simple",
+		"Core",
+		"Simple Scalable",
+		"Advanced Coding Efficiency",
+		NULL,
+	};
+
+	static const char * const vpx_golden_frame_sel[] = {
+		"Use Previous Frame",
+		"Use Previous Specific Frame",
+		NULL,
+	};
+
+	static const char * const flash_led_mode[] = {
+		"Off",
+		"Flash",
+		"Torch",
+		NULL,
+	};
+	static const char * const flash_strobe_source[] = {
+		"Software",
+		"External",
+		NULL,
+	};
+
+	static const char * const jpeg_chroma_subsampling[] = {
+		"4:4:4",
+		"4:2:2",
+		"4:2:0",
+		"4:1:1",
+		"4:1:0",
+		"Gray",
+		NULL,
+	};
+	static const char * const dv_tx_mode[] = {
+		"DVI-D",
+		"HDMI",
+		NULL,
+	};
+	static const char * const dv_rgb_range[] = {
+		"Automatic",
+		"RGB limited range (16-235)",
+		"RGB full range (0-255)",
+		NULL,
+	};
+	static const char * const detect_md_mode[] = {
+		"Disabled",
+		"Global",
+		"Threshold Grid",
+		"Region Grid",
+		NULL,
+	};
+
+
+	switch (id) {
+	case V4L2_CID_MPEG_AUDIO_SAMPLING_FREQ:
+		return mpeg_audio_sampling_freq;
+	case V4L2_CID_MPEG_AUDIO_ENCODING:
+		return mpeg_audio_encoding;
+	case V4L2_CID_MPEG_AUDIO_L1_BITRATE:
+		return mpeg_audio_l1_bitrate;
+	case V4L2_CID_MPEG_AUDIO_L2_BITRATE:
+		return mpeg_audio_l2_bitrate;
+	case V4L2_CID_MPEG_AUDIO_L3_BITRATE:
+		return mpeg_audio_l3_bitrate;
+	case V4L2_CID_MPEG_AUDIO_AC3_BITRATE:
+		return mpeg_audio_ac3_bitrate;
+	case V4L2_CID_MPEG_AUDIO_MODE:
+		return mpeg_audio_mode;
+	case V4L2_CID_MPEG_AUDIO_MODE_EXTENSION:
+		return mpeg_audio_mode_extension;
+	case V4L2_CID_MPEG_AUDIO_EMPHASIS:
+		return mpeg_audio_emphasis;
+	case V4L2_CID_MPEG_AUDIO_CRC:
+		return mpeg_audio_crc;
+	case V4L2_CID_MPEG_AUDIO_DEC_PLAYBACK:
+	case V4L2_CID_MPEG_AUDIO_DEC_MULTILINGUAL_PLAYBACK:
+		return mpeg_audio_dec_playback;
+	case V4L2_CID_MPEG_VIDEO_ENCODING:
+		return mpeg_video_encoding;
+	case V4L2_CID_MPEG_VIDEO_ASPECT:
+		return mpeg_video_aspect;
+	case V4L2_CID_MPEG_VIDEO_BITRATE_MODE:
+		return mpeg_video_bitrate_mode;
+	case V4L2_CID_MPEG_STREAM_TYPE:
+		return mpeg_stream_type;
+	case V4L2_CID_MPEG_STREAM_VBI_FMT:
+		return mpeg_stream_vbi_fmt;
+	case V4L2_CID_POWER_LINE_FREQUENCY:
+		return camera_power_line_frequency;
+	case V4L2_CID_EXPOSURE_AUTO:
+		return camera_exposure_auto;
+	case V4L2_CID_EXPOSURE_METERING:
+		return camera_exposure_metering;
+	case V4L2_CID_AUTO_FOCUS_RANGE:
+		return camera_auto_focus_range;
+	case V4L2_CID_COLORFX:
+		return colorfx;
+	case V4L2_CID_AUTO_N_PRESET_WHITE_BALANCE:
+		return auto_n_preset_white_balance;
+	case V4L2_CID_ISO_SENSITIVITY_AUTO:
+		return camera_iso_sensitivity_auto;
+	case V4L2_CID_SCENE_MODE:
+		return scene_mode;
+	case V4L2_CID_TUNE_PREEMPHASIS:
+		return tune_emphasis;
+	case V4L2_CID_TUNE_DEEMPHASIS:
+		return tune_emphasis;
+	case V4L2_CID_FLASH_LED_MODE:
+		return flash_led_mode;
+	case V4L2_CID_FLASH_STROBE_SOURCE:
+		return flash_strobe_source;
+	case V4L2_CID_MPEG_VIDEO_HEADER_MODE:
+		return header_mode;
+	case V4L2_CID_MPEG_VIDEO_MULTI_SLICE_MODE:
+		return multi_slice;
+	case V4L2_CID_MPEG_VIDEO_H264_ENTROPY_MODE:
+		return entropy_mode;
+	case V4L2_CID_MPEG_VIDEO_H264_LEVEL:
+		return mpeg_h264_level;
+	case V4L2_CID_MPEG_VIDEO_H264_LOOP_FILTER_MODE:
+		return h264_loop_filter;
+	case V4L2_CID_MPEG_VIDEO_H264_PROFILE:
+		return h264_profile;
+	case V4L2_CID_MPEG_VIDEO_H264_VUI_SAR_IDC:
+		return vui_sar_idc;
+	case V4L2_CID_MPEG_VIDEO_H264_SEI_FP_ARRANGEMENT_TYPE:
+		return h264_fp_arrangement_type;
+	case V4L2_CID_MPEG_VIDEO_H264_FMO_MAP_TYPE:
+		return h264_fmo_map_type;
+	case V4L2_CID_MPEG_VIDEO_MPEG4_LEVEL:
+		return mpeg_mpeg4_level;
+	case V4L2_CID_MPEG_VIDEO_MPEG4_PROFILE:
+		return mpeg4_profile;
+	case V4L2_CID_MPEG_VIDEO_VPX_GOLDEN_FRAME_SEL:
+		return vpx_golden_frame_sel;
+	case V4L2_CID_JPEG_CHROMA_SUBSAMPLING:
+		return jpeg_chroma_subsampling;
+	case V4L2_CID_DV_TX_MODE:
+		return dv_tx_mode;
+	case V4L2_CID_DV_TX_RGB_RANGE:
+	case V4L2_CID_DV_RX_RGB_RANGE:
+		return dv_rgb_range;
+	case V4L2_CID_DETECT_MD_MODE:
+		return detect_md_mode;
+
+	default:
+		return NULL;
+	}
+}
+// temporary until we go to the framework
+int v4l2_ctrl_query_menu(struct v4l2_querymenu *qmenu, 
+                         struct v4l2_queryctrl *qctrl,
+                         const char * const *menu_items)
+{
+	int i;
+	qmenu->reserved = 0;
+	if (menu_items == NULL)
+		menu_items = v4l2_ctrl_get_menu(qmenu->id);
+	if (menu_items == NULL ||
+	    (qctrl && (qmenu->index < qctrl->minimum || qmenu->index > qctrl->maximum)))
+		return -EINVAL;
+	for (i = 0; i < qmenu->index && menu_items[i]; i++);
+	if (menu_items[i] == NULL || menu_items[i][0] == '\0')
+		return -EINVAL;
+	strlcpy(qmenu->name, menu_items[qmenu->index], sizeof(qmenu->name));
+	return 0;
+}
+u32 v4l2_ctrl_next(const u32 * const * ctrl_classes, u32 id)
+{
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 5, 0)
+	u32 ctrl_class = V4L2_CTRL_ID2CLASS(id);
+#else
+	u32 ctrl_class = V4L2_CTRL_ID2WHICH(id);
+#endif
+        const u32 *pctrl;
+	if (ctrl_classes == NULL)
+		return 0;
+	
+	/* if no query is desired, then check if the ID is part of ctrl_classes */
+        if ((id & V4L2_CTRL_FLAG_NEXT_CTRL) == 0) {
+		/* find class */
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 5, 0)
+                while (*ctrl_classes && V4L2_CTRL_ID2CLASS(**ctrl_classes) != ctrl_class)
+                        ctrl_classes++;
+#else
+                while (*ctrl_classes && V4L2_CTRL_ID2WHICH(**ctrl_classes) != ctrl_class)
+                        ctrl_classes++;
+#endif
+
+		if (*ctrl_classes == NULL)
+			return 0;
+		pctrl = *ctrl_classes;
+		/* find control ID */
+		while (*pctrl && *pctrl != id) pctrl++;
+		return *pctrl ? id : 0;
+	}
+	id &= V4L2_CTRL_ID_MASK;
+	id++;   /* select next control */
+	/* find first class that matches (or is greater than) the class of
+	   the ID */
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 5, 0)
+        while (*ctrl_classes && V4L2_CTRL_ID2CLASS(**ctrl_classes) < ctrl_class)
+		ctrl_classes++;
+#else
+        while (*ctrl_classes && V4L2_CTRL_ID2WHICH(**ctrl_classes) < ctrl_class)
+		ctrl_classes++;
+#endif
+	/* no more classes */
+	if (*ctrl_classes == NULL)
+		return 0;
+	pctrl = *ctrl_classes;
+	/* find first ctrl within the class that is >= ID */
+	while (*pctrl && *pctrl < id) pctrl++;
+	if (*pctrl)
+		return *pctrl;
+	/* we are at the end of the controls of the current class. */
+	/* continue with next class if available */
+	ctrl_classes++;
+	if (*ctrl_classes == NULL)
+		return 0;
+	return **ctrl_classes;
+}
+#endif
 
 static int vidioc_queryctrl(struct file *file, void *priv,
 			    struct v4l2_queryctrl *ctrl)
@@ -7315,7 +8116,11 @@ static int s2226_probe_v4l(struct s2226_dev *dev)
 		q->buf_struct_size = sizeof(struct s2226_buffer);
 		q->mem_ops = &vb2_vmalloc_memops;
 		q->ops = &s2226_vb2_ops;
+#if LINUX_VERSION_CODE < KERNEL_VERSION(3, 15, 0)
 		q->timestamp_type = V4L2_BUF_FLAG_TIMESTAMP_MONOTONIC;
+#else
+		q->timestamp_flags = V4L2_BUF_FLAG_TIMESTAMP_MONOTONIC;
+#endif
 		ret = vb2_queue_init(q);
 		if (ret != 0) {
 			dev_err(&dev->udev->dev,
@@ -7346,7 +8151,9 @@ static int s2226_probe_v4l(struct s2226_dev *dev)
 #endif
 		strm->vdev.v4l2_dev = &dev->v4l2_dev;
 #if LINUX_VERSION_CODE > KERNEL_VERSION(2, 38, 0)
+#if LINUX_VERSION_CODE < KERNEL_VERSION(3, 17, 0)
 		set_bit(V4L2_FL_USE_FH_PRIO, &strm->vdev.flags);
+#endif
 #endif
 		video_set_drvdata(&strm->vdev, strm);
 		if (video_nr == -1)
@@ -7369,7 +8176,156 @@ static int s2226_probe_v4l(struct s2226_dev *dev)
 	dev->cur_input = -1;
 	dev->v4l_input = -1;
 	dev->is_decode = 0;
-	s2226_new_v4l_input(dev, S2226_INPUT_COMPOSITE_0);
+	
+	// if firmware 230 or higher, check if input already set
+	if (dev->arm_ver >= 0x230) {
+		int rc;
+		int inp;
+		rc = s2226_get_attr(dev, ATTR_INPUT, &inp);
+		if (rc != 0) {
+			s2226_new_v4l_input(dev, S2226_INPUT_COMPOSITE_0);
+			return 0;
+		}
+		dev->cur_input = inp;
+		switch (inp) {
+		case INPUT_COMP0_480I:
+			dev->v4l_input = S2226_INPUT_COMPOSITE_0;
+			dev->v4l_is_pal = 0;
+			break;
+		case INPUT_COMP0_576I:
+			dev->v4l_input = S2226_INPUT_COMPOSITE_0;
+			dev->v4l_is_pal = 1;
+			break;
+		case INPUT_SVIDEO0_480I:
+			dev->v4l_input = S2226_INPUT_SVIDEO_0;
+			dev->v4l_is_pal = 0;
+			break;
+		case INPUT_SVIDEO0_576I:
+			dev->v4l_input = S2226_INPUT_SVIDEO_0;
+			dev->v4l_is_pal = 1;
+			break;
+		case INPUT_COMP1_480I:
+			dev->v4l_input = S2226_INPUT_COMPOSITE_1;
+			dev->v4l_is_pal = 0;
+			break;
+		case INPUT_COMP1_576I:
+			dev->v4l_input = S2226_INPUT_COMPOSITE_1;
+			dev->v4l_is_pal = 1;
+			break;
+		case INPUT_SVIDEO1_480I:
+			dev->v4l_input = S2226_INPUT_SVIDEO_1;
+			dev->v4l_is_pal = 0;
+			break;
+		case INPUT_SVIDEO1_576I:
+			dev->v4l_input = S2226_INPUT_SVIDEO_1;
+			dev->v4l_is_pal = 1;
+			break;
+		case INPUT_SDI_480I_CB:
+			dev->v4l_input = S2226_INPUT_SD_COLORBARS;
+			dev->v4l_is_pal = 0;
+			break;
+		case INPUT_SDI_576I_CB:
+			dev->v4l_input = S2226_INPUT_SD_COLORBARS;
+			dev->v4l_is_pal = 1;
+			break;
+		case INPUT_SDI_720P_5994_CB:
+		case INPUT_SDI_720P_60_CB:
+			dev->v4l_input = S2226_INPUT_720P_COLORBARS;
+			dev->v4l_is_pal = 0;
+			break;
+		case INPUT_SDI_1080P_24_CB:
+			dev->v4l_input = S2226_INPUT_1080P_CB_24;
+			dev->v4l_is_pal = 0;			
+			break;
+		case INPUT_SDI_1080P_2398_CB:
+			dev->v4l_input = S2226_INPUT_1080P_CB_2398;
+			dev->v4l_is_pal = 0;			
+			break;
+		case INPUT_SDI_1080P_2997_CB:
+			dev->v4l_input = S2226_INPUT_1080P_CB_2997;
+			dev->v4l_is_pal = 0;			
+			break;
+		case INPUT_SDI_1080P_30_CB:
+			dev->v4l_input = S2226_INPUT_1080P_CB_30;
+			dev->v4l_is_pal = 0;
+			break;
+		case INPUT_SDI_1080P_2997:
+			dev->v4l_input = S2226_INPUT_1080P_2997;
+			dev->v4l_is_pal = 0;			
+			break;
+		case INPUT_SDI_1080P_30:
+			dev->v4l_input = S2226_INPUT_1080P_30;
+			dev->v4l_is_pal = 0;
+			break;						
+		case INPUT_SDI_720P_50_CB:
+			dev->v4l_input = S2226_INPUT_720P_COLORBARS;
+			dev->v4l_is_pal = 1;
+			break;
+		case INPUT_SDI_1080I_5994_CB:
+		case INPUT_SDI_1080I_60_CB:
+			dev->v4l_input = S2226_INPUT_1080I_COLORBARS;
+			dev->v4l_is_pal = 0;
+			break;
+		case INPUT_SDI_1080I_50_CB:
+			dev->v4l_input = S2226_INPUT_1080I_COLORBARS;
+			dev->v4l_is_pal = 1;
+			break;
+		case INPUT_SDI_576I:
+			dev->v4l_input = S2226_INPUT_SDI_SD;
+			dev->v4l_is_pal = 1;
+			break;
+		case INPUT_SDI_480I:
+			dev->v4l_input = S2226_INPUT_SDI_SD;
+			dev->v4l_is_pal = 0;
+			break;
+		case INPUT_SDI_720P_5994:
+			dev->v4l_is_pal = 0;
+			dev->v4l_input = S2226_INPUT_SDI_720P_5994;
+			break;
+		case INPUT_SDI_720P_60:
+			dev->v4l_is_pal = 0;
+			dev->v4l_input = S2226_INPUT_SDI_720P_60;
+			break;
+		case INPUT_SDI_720P_50:
+			dev->v4l_is_pal = 1;
+			dev->v4l_input = S2226_INPUT_SDI_720P_50;
+			break;
+		case INPUT_SDI_1080I_5994:
+			dev->v4l_is_pal = 0;
+			dev->v4l_input = S2226_INPUT_SDI_1080I_5994;
+			break;
+		case INPUT_SDI_1080I_60:
+			dev->v4l_is_pal = 0;
+			dev->v4l_input = S2226_INPUT_SDI_1080I_60;
+			break;
+		case INPUT_SDI_1080I_50:
+			dev->v4l_is_pal = 1;
+			dev->v4l_input = S2226_INPUT_SDI_1080I_50;
+			break;
+		case INPUT_SDI_720P_24:
+			dev->v4l_is_pal = 0;
+			dev->v4l_input = S2226_INPUT_SDI_720P_24;
+			break;
+		case INPUT_SDI_720P_2398:
+			dev->v4l_is_pal = 1;
+			dev->v4l_input = S2226_INPUT_SDI_720P_2398;
+			break;
+		case INPUT_SDI_1080P_24:
+			dev->v4l_is_pal = 0;
+			dev->v4l_input = S2226_INPUT_SDI_1080P_24;
+			break;
+		case INPUT_SDI_1080P_2398:
+			dev->v4l_is_pal = 1;
+			dev->v4l_input = S2226_INPUT_SDI_1080P_2398;
+			break;
+		default:
+			// unknown input, change to composite by default
+			s2226_new_v4l_input(dev, S2226_INPUT_COMPOSITE_0);
+			break;
+		}
+	} else {
+		s2226_new_v4l_input(dev, S2226_INPUT_COMPOSITE_0);
+	}
 	return 0;
 }
 
@@ -7386,6 +8342,6 @@ static int s2226_probe_v4l(struct s2226_dev *dev)
 module_init(usb_s2226_init);
 module_exit(usb_s2226_exit);
 
-MODULE_DESCRIPTION("Sensoray 2226 Linux driver (Copyright 2008-2014)");
+MODULE_DESCRIPTION("Sensoray 2226 Linux driver (Copyright 2008-2017)");
 MODULE_LICENSE("GPL");
 MODULE_VERSION(S2226_VERSION);

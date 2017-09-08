@@ -611,13 +611,14 @@ init_device                     (void)
 	}
 	
 	fprintf(stderr, "Card: %s\n", cap.card);
-#if 1
-	if (strncmp(cap.card, "Sensoray Model 2226", 19)) {
+
+	if (strncmp(cap.card, "2226", 4)) {
 		fprintf (stderr, "%s card is not supported\n",
 			dev_name);
+        printf(cap.card);
 		exit (EXIT_FAILURE);
 	}
-#endif
+
 	
 
 	/* set osd or not*/
@@ -1025,23 +1026,59 @@ open_device                     (void)
 {
 	struct stat st;
 
-	if (isdigit(dev_name[0]) && strlen(dev_name) <= 6) {
+	if ((isdigit(dev_name[0]) && strlen(dev_name) <= 6) ||
+	    (((dev_name[0] == 'H') || (dev_name[0] == 'P') || (dev_name[0] == 'D')) &&
+	     isdigit(dev_name[1]) && strlen(dev_name) <= 7)) {
 		// find dev node with serial number
 		char *saved = dev_name;
 		int i = 0;
+		int type;
 		char tmp[32];
 		char card[32];
 		struct v4l2_capability cap;
-		sprintf(card, "Sensoray Model 2253 SN#%s", dev_name);
+
+		if (isdigit(dev_name[0])) {
+			type = 0;
+			printf("open 2226 H.264 device, SN %s\n", dev_name);
+		} else {
+			if (dev_name[0] == 'D') {
+				printf("open 2226 Decode device, SN %s\n", dev_name+1);
+				type = 3;
+			} else if (dev_name[0] == 'P') {
+				type = 2;
+				printf("open 2226 Preview device, SN %s\n", dev_name+1);
+			} else {
+				type = 1;
+				printf("open 2226 H.264 device, SN %s\n", dev_name+1);
+			}
+		}
+		switch (type) {
+		case 0:
+			sprintf(card, "2226 H.264 SN#%s", dev_name);
+			break;
+		case 1:
+		default:
+			sprintf(card, "2226 H.264 SN#%s", dev_name+1);
+			break;
+		case 2:
+			sprintf(card, "2226 Preview SN#%s", dev_name+1);
+			break;
+		case 3:
+			sprintf(card, "2226 Decode SN#%s", dev_name+1);
+			break;
+		}
 		dev_name = tmp;
 		for (i = 0; i < 100; i++) {
+
 			sprintf(tmp, "/dev/video%d", i);
-			fd = open(dev_name, O_RDWR /* required */ | O_NONBLOCK, 0);
+			fd = open(tmp, O_RDWR /* required */ | O_NONBLOCK, 0);
 			if (fd == -1)
 				continue; // failed to open
 			if (0 == xioctl (fd, VIDIOC_QUERYCAP, &cap)) {
-				if (strcmp(cap.card, card) == 0)
+				if (strcmp(cap.card, card) == 0) {
+					//printf("found!\n");
 					return; // found!
+				}
 			}
 			close(fd);
 			fd = -1;
@@ -1051,7 +1088,7 @@ open_device                     (void)
 
 	if (-1 == stat (dev_name, &st)) {
 		fprintf (stderr, "Cannot identify '%s': %d, %s\n",
-			dev_name, errno, strerror (errno));
+			 dev_name, errno, strerror (errno));
 		exit (EXIT_FAILURE);
 	}
 
@@ -1122,24 +1159,16 @@ usage                           (FILE *                 fp,
 	fprintf (fp,
 		"Usage: %s [options]\n\n"
 		"Options:\n"
-		"-d | --device name   Video device name [/dev/video0] or serial no.\n"
+		"-d | --device name   Video device name [/dev/video0] or prefix/serial no.\n"
+		"-d | --device name   Eg. for serial number 12345, use 12345 or H12345 for H.264\n"
+		"-d | --device name   Eg. for serial number 12345, use P12345 for preview\n"
+		"-d | --device name   Eg. for serial number 12345, use D12345 for decode\n"
 		"-h | --help          Print this message\n"
 		"-c | --caption       Caption for OSD\n"
-		"-j | --jpeg          JPEG separate files\n"
-		"-J | --mjpeg         Motion JPEG single file\n"
-		"-q | --qual          Jpeg Quality factor(10-90, 75 default)\n"
-		"-4 | --mpeg4         MPEG4 elementary stream\n"
 		"-x | --h264          h.264 elementary stream\n"
 		"-y | --yuyv          YUYV raw video\n"
 		"-u | --uyvy          UYVY raw video\n"
 		"-8 | --y8            Y8 raw video\n"
-		"-B | --bgr24         BGR24 (24-bpp) raw video\n"
-		"-5 | --rgb565        RGB565 (16-bpp) raw video\n"
-		"-n | --nv12          NV12 raw (YUV420 semi-planar)\n"
-		"-m | --mp42          MP4 mux (with -4 or -x)\n"
-		"-z | --mp4f          MP4 fragmented mux (with -4 or -x)\n"
-		"-t | --ts            MPEG-TS mux (with -4 or -x)\n"
-		"-T | --ps            MPEG-PS mux (with -2 -4 or -x)\n"
 		"-s | --size          Size 0=vga, 1=1/2 VGA, or NxN\n"
 		"-o | --out name      Output file name (MPEG only)\n"
 		"-b | --br bitrate    Set video bitrate(bps, 2mbit default)\n"
@@ -1185,23 +1214,10 @@ long_options [] = {
 	{ "mmap",	no_argument,		NULL,		'M' },
 	{ "read",	no_argument,		NULL,		'R' },
 	{ "userp",	no_argument,		NULL,		'E' },
-	{ "jpeg",	no_argument,		NULL,		'j' },
-	{ "mjpeg",	no_argument,		NULL,		'J' },
-	{ "qual",	no_argument,		NULL,		'q' },
-//	{ "mpeg1",	no_argument,		NULL,		'1' },
-//	{ "mpeg2",	no_argument,		NULL,		'2' },
-	{ "mpeg4",	no_argument,		NULL,		'4' },
 	{ "y8",		no_argument,		NULL,		'8' },
-	{ "mp42",	no_argument,		NULL,		'm' },
-	{ "mp4f",	no_argument,		NULL,		'z' },
-	{ "ts",		no_argument,		NULL,		't' },
-	{ "ps",		no_argument,		NULL,		'T' },
-	{ "nv12",	no_argument,		NULL,		'n' },
 	{ "h264",	no_argument,		NULL,		'x' },
 	{ "yuyv",	no_argument,		NULL,		'y' },
 	{ "uyvy",	no_argument,		NULL,		'u' },
-	{ "bgr24",	no_argument,		NULL,		'B' },
-	{ "rgb565",	no_argument,		NULL,		'5' },
 	{ "input",	required_argument,	NULL,		'p' },
 //        { "svideo",	no_argument,		NULL,		'v' },
 	{ "size",	required_argument,	NULL,		's' },

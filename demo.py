@@ -18,6 +18,10 @@ V4L2_PIX_FMT_MP42 = 0x3234504D
 V4L2_PIX_FMT_MP2V = 0x5632504D
 V4L2_MPEG_VIDEO_ENCODING_MPEG_4 = 3
 
+G_stream = gtk.Button("Stream")
+G_capture = gtk.Button("Save")
+G_stop = gtk.Button("Stop")
+
 debug = False
 for arg in sys.argv:
 	if arg == "-d":
@@ -446,7 +450,22 @@ class Demo:
 		dprint("new input is", data)
 		input = ctypes.c_int(data)
 		self.input = int(data)
-		try: ioctl(self.vd, VIDIOC_S_INPUT, input)
+		try:
+                        ioctl(self.vd, VIDIOC_S_INPUT, input)
+                        #1080p30 and 1080p29.97 colorbars are for overlay
+                        #only
+                        if (widget.get_label() == "1080p30 Colorbars" or
+                            widget.get_label() == "1080p29.97 Colorbars" or
+
+                            widget.get_label() == "SDI Input(1080p 29.97Hz NTSC)" or
+                            widget.get_label() == "SDI Input(1080p 30Hz NTSC)"):
+                                G_stop.set_sensitive(False)
+                                G_capture.set_sensitive(False)
+                                G_stream.set_sensitive(False)
+                        else:
+                                G_stop.set_sensitive(True)
+                                G_capture.set_sensitive(True)
+                                G_stream.set_sensitive(True)
 		except IOError: return
 
 	def set_output(self, widget, data=None):
@@ -981,8 +1000,8 @@ class Demo:
 			label.show()
 			vbox.pack_start(hbox, False, False, 0)
 			hbox.show()
-
-			if cp.card == "Sensoray Model 2226 Decode":
+			cardname = cp.card
+			if cardname.find("2226 Decode") != -1:
 				button = gtk.Button("Quit")
 				button.connect_object("clicked", gtk.Widget.destroy, self.window)
 				button.show()
@@ -1021,6 +1040,7 @@ class Demo:
 				try: ioctl(self.vd, VIDIOC_G_INPUT, curinput)
 				except: pass
 				self.input = curinput.value
+				cur_input = curinput.value
 
 				opt.set_history(self.input)
 				opt.show()
@@ -1078,7 +1098,8 @@ class Demo:
 				hbox = gtk.HBox(False, 10)
 				label = gtk.Label("Preview Size:")
 				hbox.pack_start(label, False, False, 0)
-				if cp.card == "Sensoray Model 2226 Preview":
+				cardname = cp.card
+				if cardname.find("2226 Preview") != -1 :
 					label.show()
 
 				opt = gtk.OptionMenu()
@@ -1091,6 +1112,7 @@ class Demo:
 					[320,240, "SIF"],
 					[176,144, "QCIF"],
 					[160,128, "QSIF"],
+					[1280,720, "720P(HD inputs only)"],
 					]:
 					menu.append(make_menu_item("%dx%d %s" % (dim[0],dim[1],dim[2]), self.set_dim, dim[0:2]))
 					if self.width == dim[0] and self.height == dim[1]:
@@ -1100,11 +1122,11 @@ class Demo:
 				opt.set_menu(menu)
 				opt.set_history(menudefault)
 				hbox.pack_start(opt, False, False, 0)
-				if cp.card == "Sensoray Model 2226 Preview":
+				if cardname.find("2226 Preview") != -1 :
 					opt.show()
 
 				vbox.pack_start(hbox, False, False, 0)
-				if cp.card == "Sensoray Model 2226 Preview":
+				if cardname.find("2226 Preview") != -1 :
 					hbox.show()
 
 			# enumerate video standards
@@ -1624,13 +1646,17 @@ class Demo:
 
 				mplayer = gtk.Button("Preview")
 				mplayer.connect_object("clicked", self.launch_mplayer, None)
-				if cp.card == "Sensoray Model 2226 Preview":
+				cardname = cp.card;
+				if cardname.find("2226 Preview") != -1:
 					mplayer.show()
 				quitbox.pack_start(mplayer, False, False, 0)
 
-				capture = gtk.Button("Save")
+                                capture = G_capture
+                                capture.set_label("Save")
+#				capture = G_capture #gtk.Button("Save")
+
 				capture.connect_object("clicked", self.launch_capture, None)
-				if cp.card == "Sensoray Model 2226 H.264":
+				if cardname.find("2226 H.264") != -1:
 					capture.show()
 				quitbox.pack_start(capture, False, False, 0)
 
@@ -1638,13 +1664,15 @@ class Demo:
 				#capture.connect_object("clicked", self.launch_capture_avi, None)
 				#capture.show()
 				#vbox.pack_start(capture, False, False, 0)
-				stream = gtk.Button("Stream")
+				stream = G_stream # gtk.Button("Stream")
+                                stream.set_label("Stream")
 				stream.connect_object("clicked", self.launch_stream, None)
-				if cp.card == "Sensoray Model 2226 H.264":
+				if cardname.find("2226 H.264") != -1:
 					stream.show()
 				quitbox.pack_start(stream, False, False, 0)
 
-				button = gtk.Button("Stop")
+				button = G_stop #gtk.Button("Stop")
+                                button.set_label("Stop")
 				button.connect_object("clicked", self.stop_thread, None)
 				button.show()
 				quitbox.pack_start(button, False, False, 0)

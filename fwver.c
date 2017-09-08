@@ -35,7 +35,7 @@ static void open_device(void)
             return;
         }
         printf("devname %s\n", cap.card);
-        if (strncmp(cap.card, "Sensoray Model 2226", 19)) {
+        if (strncmp(cap.card, "2226", 4)) {
             fprintf (stderr, "not a 2226 device, searching other /dev/video devices\n");
             fclose(fdev);
             fdev = NULL;

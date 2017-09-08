@@ -30,7 +30,7 @@ static int G_arm, G_fpga;
 static int fd;
 static char dev_name[100];
 
-#define FNAME_ARM "f2226_228h.bin"
+#define FNAME_ARM "f2226_230h.bin"
 #define FNAME_FPGA "s2226_Ver.0.5.9.bin"
 
 void control_c(int sig)
@@ -156,7 +156,7 @@ int update_fw(char *fwname, int addr, int len)
 #define FPGA_REVA 33
 #define FPGA_REVB 59
 #define ARM_REVA 0x5c
-#define ARM_REVB 0x228
+#define ARM_REVB 0x230
 
 
 static void errno_exit(const char *s)
@@ -213,7 +213,7 @@ static void open_device(void)
             exit (EXIT_FAILURE);
         }
         printf("devname %s\n", cap.card);
-        if (strncmp(cap.card, "Sensoray Model 2226", 19)) {
+        if (strncmp(cap.card, "2226", 4)) {
             fprintf (stderr, "not a 2226 device, searching other /dev/video devices\n");
             close(fd);
             fd = -1;
@@ -252,7 +252,7 @@ static void init_device(void)
 	}
 	
 	fprintf(stderr, "Card: %s\n", cap.card);
-	if (strncmp(cap.card, "Sensoray Model 2226", 19)) {
+	if (strncmp(cap.card, "2226", 4)) {
 		fprintf (stderr, "Sorry, \"%s\" is not a Sensoray 2226 device\n",
 			dev_name);
 		exit (EXIT_FAILURE);

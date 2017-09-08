@@ -1,5 +1,5 @@
 KERNEL_SRC= /lib/modules/$(shell uname -r)/build
-
+KDIR=${KERNEL_SRC}
 ifeq ($(shell uname -m),x86_64)
 LIBBITS = _64
 else
@@ -28,7 +28,7 @@ EXTRA_CFLAGS += -Wall -O2 -D_LINUX -DOSTYPE_LINUX -DDRIVER_BUILD -DOS_LINUX -DCO
 
 
 modules:
-	$(MAKE) -C $(KERNEL_SRC) SUBDIRS=$(SUBDIR) $@
+	$(MAKE) -C $(KDIR) SUBDIRS=$(SUBDIR) $@
 
 modules_install: 
 	mkdir -p /lib/modules/$(shell uname -r)/extra
